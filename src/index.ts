@@ -514,21 +514,29 @@ async function main(): Promise<void> {
   try {
     clientManager = createClientManager();
   } catch (err) {
-    console.error('\n╔════════════════════════════════════════════════════════════════╗');
-    console.error('║  Missing message platform configuration                        ║');
-    console.error('╠════════════════════════════════════════════════════════════════╣');
-    console.error('║  Please configure at least one platform in .env:               ║');
-    console.error('║                                                                ║');
-    console.error('║  Feishu:                                                       ║');
-    console.error('║    FEISHU_APP_ID=cli_xxxxx                                     ║');
-    console.error('║    FEISHU_APP_SECRET=xxxxx                                     ║');
-    console.error('║                                                                ║');
-    console.error('║  DingTalk (coming soon):                                       ║');
-    console.error('║    DINGTALK_APP_KEY=xxxxx                                      ║');
-    console.error('║    DINGTALK_APP_SECRET=xxxxx                                   ║');
-    console.error('║                                                                ║');
-    console.error('║  See .env.example for reference.                               ║');
-    console.error('╚════════════════════════════════════════════════════════════════╝\n');
+    console.error(`
+\x1b[31m
+  ███████╗██████╗ ██████╗  ██████╗ ██████╗ 
+  ██╔════╝██╔══██╗██╔══██╗██╔═══██╗██╔══██╗
+  █████╗  ██████╔╝██████╔╝██║   ██║██████╔╝
+  ██╔══╝  ██╔══██╗██╔══██╗██║   ██║██╔══██╗
+  ███████╗██║  ██║██║  ██║╚██████╔╝██║  ██║
+  ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝
+\x1b[0m
+  \x1b[31m✗ 缺少消息平台配置\x1b[0m
+
+  请在 \x1b[33m.env\x1b[0m 中配置至少一个平台:
+
+  \x1b[36m飞书:\x1b[0m
+    FEISHU_APP_ID=cli_xxxxx
+    FEISHU_APP_SECRET=xxxxx
+
+  \x1b[36m钉钉:\x1b[0m
+    DINGTALK_APP_KEY=xxxxx
+    DINGTALK_APP_SECRET=xxxxx
+
+  详见 \x1b[33m.env.example\x1b[0m
+`);
     process.exit(1);
   }
 
@@ -565,25 +573,41 @@ async function main(): Promise<void> {
   // Start all message clients
   clientManager.start(handleIncomingMessage);
 
-  // Display startup info
-  const platformsDisplay = enabledPlatforms.map(p => clientManager.getPlatformDisplayName(p)).join(', ');
-  console.log(`
-╔════════════════════════════════════════════════════════════════╗
-║  FlashClaw Started                                             ║
-╠════════════════════════════════════════════════════════════════╣
-║                                                                ║
-║  Enabled Platforms: ${platformsDisplay.padEnd(42)}║
-║  Agent Mode: Direct (Claude Agent SDK)                         ║
-║                                                                ║
-║  All platforms use WebSocket/long connection                   ║
-║  No public server / domain / ngrok needed!                     ║
-║                                                                ║
-╚════════════════════════════════════════════════════════════════╝
-`);
+  // Display startup banner
+  const platformsDisplay = enabledPlatforms.map(p => clientManager.getPlatformDisplayName(p)).join(' | ');
+  const groupCount = Object.keys(registeredGroups).length;
+  
+  const banner = `
+\x1b[33m
+  ███████╗██╗      █████╗ ███████╗██╗  ██╗ ██████╗██╗      █████╗ ██╗    ██╗
+  ██╔════╝██║     ██╔══██╗██╔════╝██║  ██║██╔════╝██║     ██╔══██╗██║    ██║
+  █████╗  ██║     ███████║███████╗███████║██║     ██║     ███████║██║ █╗ ██║
+  ██╔══╝  ██║     ██╔══██║╚════██║██╔══██║██║     ██║     ██╔══██║██║███╗██║
+  ██║     ███████╗██║  ██║███████║██║  ██║╚██████╗███████╗██║  ██║╚███╔███╔╝
+  ╚═╝     ╚══════╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝ ╚═════╝╚══════╝╚═╝  ╚═╝ ╚══╝╚══╝ 
+\x1b[0m
+\x1b[36m  ⚡ 多平台个人 AI 助手 - 快速、安全、可扩展\x1b[0m
+
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                                                                         │
+  │  \x1b[32m✓\x1b[0m 状态: \x1b[32m运行中\x1b[0m                                                        │
+  │  \x1b[32m✓\x1b[0m 模式: \x1b[33mDirect (Claude Agent SDK)\x1b[0m                                    │
+  │  \x1b[32m✓\x1b[0m 平台: \x1b[36m${platformsDisplay.padEnd(55)}\x1b[0m│
+  │  \x1b[32m✓\x1b[0m 群组: \x1b[33m${String(groupCount).padEnd(55)}\x1b[0m│
+  │                                                                         │
+  │  \x1b[90m所有平台使用 WebSocket 长连接，无需公网服务器\x1b[0m                        │
+  │                                                                         │
+  └─────────────────────────────────────────────────────────────────────────┘
+
+  \x1b[90m按 Ctrl+C 停止服务\x1b[0m
+`;
+
+  console.log(banner);
 
   logger.info({ 
     mode: 'direct',
-    platforms: enabledPlatforms 
+    platforms: enabledPlatforms,
+    groups: groupCount
   }, 'FlashClaw started');
 }
 
