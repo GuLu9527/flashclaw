@@ -1,0 +1,11 @@
+{
+  "plugins": {
+    "feishu": { "enabled": true },
+    "dingtalk": { "enabled": false },
+    "send-message": { "enabled": true },
+    "schedule-task": { "enabled": true },
+    "list-tasks": { "enabled": true },
+    "cancel-task": { "enabled": true }
+  },
+  "hotReload": true
+}

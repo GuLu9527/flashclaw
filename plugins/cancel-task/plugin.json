@@ -1,0 +1,9 @@
+{
+  "name": "cancel-task",
+  "version": "1.0.0",
+  "type": "tool",
+  "description": "取消定时任务",
+  "main": "index.ts"
+}
+
+

@@ -1,18 +1,17 @@
 /**
  * Agent Runner for FlashClaw
- * 直接运行 Claude Agent SDK
+ * 使用 Anthropic SDK 直接调用 API
  * 
  * Features:
- * - Direct Claude Agent SDK integration
- * - IPC-based MCP tools for messaging and task scheduling
+ * - Direct Anthropic API integration
+ * - IPC-based tools for messaging and task scheduling
  * - Per-group isolation via working directories
+ * - 记忆系统集成
  */
 
 import fs from 'fs';
 import path from 'path';
 import pino from 'pino';
-import { query, HookCallback, PreCompactHookInput, createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
-import { z } from 'zod';
 import { CronExpressionParser } from 'cron-parser';
 import {
   GROUPS_DIR,
@@ -20,11 +19,24 @@ import {
   AGENT_TIMEOUT
 } from './config.js';
 import { RegisteredGroup } from './types.js';
+import { ApiClient, ChatMessage, ToolSchema, createApiClient, TextBlock, ImageBlock } from './core/api-client.js';
+import { currentModelSupportsVision, getCurrentModelId } from './core/model-capabilities.js';
+import { MemoryManager, createMemoryManager } from './core/memory.js';
 
 const logger = pino({
   level: process.env.LOG_LEVEL || 'info',
   transport: { target: 'pino-pretty', options: { colorize: true } }
 });
+
+/**
+ * 图片附件
+ */
+export interface ImageAttachment {
+  type: 'image';
+  /** base64 data URL 或纯 base64 数据 */
+  content: string;
+  mimeType?: string;
+}
 
 export interface AgentInput {
   prompt: string;
@@ -33,6 +45,8 @@ export interface AgentInput {
   chatJid: string;
   isMain: boolean;
   isScheduledTask?: boolean;
+  /** 图片附件列表 */
+  attachments?: ImageAttachment[];
 }
 
 export interface AgentOutput {
@@ -42,18 +56,35 @@ export interface AgentOutput {
   error?: string;
 }
 
-// ==================== IPC MCP Server ====================
+// ==================== 工具系统 ====================
 
-interface IpcMcpContext {
+/**
+ * IPC 上下文
+ */
+interface IpcContext {
   chatJid: string;
   groupFolder: string;
   isMain: boolean;
 }
 
+/**
+ * 工具执行结果
+ */
+interface ToolResult {
+  content: string;
+  isError?: boolean;
+}
+
+/**
+ * 获取 IPC 目录路径
+ */
 function getIpcDir(groupFolder: string): string {
   return path.join(DATA_DIR, 'ipc', groupFolder);
 }
 
+/**
+ * 写入 IPC 文件（原子操作）
+ */
 function writeIpcFile(dir: string, data: object): string {
   fs.mkdirSync(dir, { recursive: true });
 
@@ -68,448 +99,395 @@ function writeIpcFile(dir: string, data: object): string {
   return filename;
 }
 
-export function createIpcMcp(ctx: IpcMcpContext) {
+/**
+ * 内置工具定义
+ * 这些工具用于消息发送和任务调度
+ */
+export function getBuiltinTools(): ToolSchema[] {
+  return [
+    {
+      name: 'send_message',
+      description: 'Send a message to the current chat. Use this to proactively share information or updates.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          text: {
+            type: 'string',
+            description: 'The message text to send'
+          }
+        },
+        required: ['text']
+      }
+    },
+    {
+      name: 'schedule_task',
+      description: `Schedule a recurring or one-time task. The task will run as a full agent with access to all tools.
+
+CONTEXT MODE - Choose based on task type:
+• "group" (recommended for most tasks): Task runs in the group's conversation context, with access to chat history and memory.
+• "isolated": Task runs in a fresh session with no conversation history.
+
+SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
+• cron: Standard cron expression (e.g., "0 9 * * *" for daily at 9am)
+• interval: Milliseconds between runs (e.g., "300000" for 5 minutes)
+• once: Local time like "2026-02-01T15:30:00" (no Z suffix!)`,
+      input_schema: {
+        type: 'object',
+        properties: {
+          prompt: {
+            type: 'string',
+            description: 'What the agent should do when the task runs'
+          },
+          schedule_type: {
+            type: 'string',
+            enum: ['cron', 'interval', 'once'],
+            description: 'cron=recurring at specific times, interval=recurring every N ms, once=run once'
+          },
+          schedule_value: {
+            type: 'string',
+            description: 'The schedule value based on schedule_type'
+          },
+          context_mode: {
+            type: 'string',
+            enum: ['group', 'isolated'],
+            description: 'group=runs with chat history, isolated=fresh session'
+          },
+          target_group: {
+            type: 'string',
+            description: 'Target group folder (main only, defaults to current group)'
+          }
+        },
+        required: ['prompt', 'schedule_type', 'schedule_value']
+      }
+    },
+    {
+      name: 'list_tasks',
+      description: "List all scheduled tasks. From main: shows all tasks. From other groups: shows only that group's tasks.",
+      input_schema: {
+        type: 'object',
+        properties: {}
+      }
+    },
+    {
+      name: 'pause_task',
+      description: 'Pause a scheduled task. It will not run until resumed.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          task_id: {
+            type: 'string',
+            description: 'The task ID to pause'
+          }
+        },
+        required: ['task_id']
+      }
+    },
+    {
+      name: 'resume_task',
+      description: 'Resume a paused task.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          task_id: {
+            type: 'string',
+            description: 'The task ID to resume'
+          }
+        },
+        required: ['task_id']
+      }
+    },
+    {
+      name: 'cancel_task',
+      description: 'Cancel and delete a scheduled task.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          task_id: {
+            type: 'string',
+            description: 'The task ID to cancel'
+          }
+        },
+        required: ['task_id']
+      }
+    },
+    {
+      name: 'register_group',
+      description: `Register a new chat group so the agent can respond to messages there. Main group only.
+The folder name should be lowercase with hyphens (e.g., "family-chat").`,
+      input_schema: {
+        type: 'object',
+        properties: {
+          jid: {
+            type: 'string',
+            description: 'The chat ID (e.g., "oc_xxxxxxxx")'
+          },
+          name: {
+            type: 'string',
+            description: 'Display name for the group'
+          },
+          folder: {
+            type: 'string',
+            description: 'Folder name for group files'
+          },
+          trigger: {
+            type: 'string',
+            description: 'Trigger word (e.g., "@Andy")'
+          }
+        },
+        required: ['jid', 'name', 'folder', 'trigger']
+      }
+    },
+    {
+      name: 'remember',
+      description: 'Save important information to long-term memory. Use this to remember user preferences, important facts, or anything that should persist across conversations.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          key: {
+            type: 'string',
+            description: 'A short key to identify this memory (e.g., "user_name", "preferred_language")'
+          },
+          value: {
+            type: 'string',
+            description: 'The information to remember'
+          }
+        },
+        required: ['key', 'value']
+      }
+    },
+    {
+      name: 'recall',
+      description: 'Retrieve information from long-term memory. Use this to recall previously saved information.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          key: {
+            type: 'string',
+            description: 'The key of the memory to recall. Leave empty to get all memories.'
+          }
+        }
+      }
+    }
+  ];
+}
+
+/**
+ * 创建工具执行器
+ */
+export function createToolExecutor(ctx: IpcContext, memoryManager: MemoryManager) {
   const { chatJid, groupFolder, isMain } = ctx;
   const IPC_DIR = getIpcDir(groupFolder);
   const MESSAGES_DIR = path.join(IPC_DIR, 'messages');
   const TASKS_DIR = path.join(IPC_DIR, 'tasks');
 
-  return createSdkMcpServer({
-    name: 'flashclaw',
-    version: '1.0.0',
-    tools: [
-      tool(
-        'send_message',
-        'Send a message to the current chat. Use this to proactively share information or updates.',
-        {
-          text: z.string().describe('The message text to send')
-        },
-        async (args: { text: string }) => {
-          const data = {
-            type: 'message',
-            chatJid,
-            text: args.text,
-            groupFolder,
-            timestamp: new Date().toISOString()
-          };
+  return async (name: string, params: unknown): Promise<ToolResult> => {
+    const args = params as Record<string, unknown>;
 
-          const filename = writeIpcFile(MESSAGES_DIR, data);
+    switch (name) {
+      case 'send_message': {
+        const data = {
+          type: 'message',
+          chatJid,
+          text: args.text as string,
+          groupFolder,
+          timestamp: new Date().toISOString()
+        };
+        const filename = writeIpcFile(MESSAGES_DIR, data);
+        return { content: `Message queued for delivery (${filename})` };
+      }
 
-          return {
-            content: [{
-              type: 'text',
-              text: `Message queued for delivery (${filename})`
-            }]
-          };
-        }
-      ),
+      case 'schedule_task': {
+        const scheduleType = args.schedule_type as string;
+        const scheduleValue = args.schedule_value as string;
 
-      tool(
-        'schedule_task',
-        `Schedule a recurring or one-time task. The task will run as a full agent with access to all tools.
-
-CONTEXT MODE - Choose based on task type:
-• "group" (recommended for most tasks): Task runs in the group's conversation context, with access to chat history and memory. Use for tasks that need context about ongoing discussions, user preferences, or previous interactions.
-• "isolated": Task runs in a fresh session with no conversation history. Use for independent tasks that don't need prior context. When using isolated mode, include all necessary context in the prompt itself.
-
-If unsure which mode to use, ask the user. Examples:
-- "Remind me about our discussion" → group (needs conversation context)
-- "Check the weather every morning" → isolated (self-contained task)
-- "Follow up on my request" → group (needs to know what was requested)
-- "Generate a daily report" → isolated (just needs instructions in prompt)
-
-SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
-• cron: Standard cron expression (e.g., "*/5 * * * *" for every 5 minutes, "0 9 * * *" for daily at 9am LOCAL time)
-• interval: Milliseconds between runs (e.g., "300000" for 5 minutes, "3600000" for 1 hour)
-• once: Local time WITHOUT "Z" suffix (e.g., "2026-02-01T15:30:00"). Do NOT use UTC/Z suffix.`,
-        {
-          prompt: z.string().describe('What the agent should do when the task runs. For isolated mode, include all necessary context here.'),
-          schedule_type: z.enum(['cron', 'interval', 'once']).describe('cron=recurring at specific times, interval=recurring every N ms, once=run once at specific time'),
-          schedule_value: z.string().describe('cron: "*/5 * * * *" | interval: milliseconds like "300000" | once: local timestamp like "2026-02-01T15:30:00" (no Z suffix!)'),
-          context_mode: z.enum(['group', 'isolated']).default('group').describe('group=runs with chat history and memory, isolated=fresh session (include context in prompt)'),
-          target_group: z.string().optional().describe('Target group folder (main only, defaults to current group)')
-        },
-        async (args: { prompt: string; schedule_type: 'cron' | 'interval' | 'once'; schedule_value: string; context_mode?: 'group' | 'isolated'; target_group?: string }) => {
-          // Validate schedule_value before writing IPC
-          if (args.schedule_type === 'cron') {
-            try {
-              CronExpressionParser.parse(args.schedule_value);
-            } catch (err) {
-              return {
-                content: [{ type: 'text', text: `Invalid cron: "${args.schedule_value}". Use format like "0 9 * * *" (daily 9am) or "*/5 * * * *" (every 5 min).` }],
-                isError: true
-              };
-            }
-          } else if (args.schedule_type === 'interval') {
-            const ms = parseInt(args.schedule_value, 10);
-            if (isNaN(ms) || ms <= 0) {
-              return {
-                content: [{ type: 'text', text: `Invalid interval: "${args.schedule_value}". Must be positive milliseconds (e.g., "300000" for 5 min).` }],
-                isError: true
-              };
-            }
-          } else if (args.schedule_type === 'once') {
-            const date = new Date(args.schedule_value);
-            if (isNaN(date.getTime())) {
-              return {
-                content: [{ type: 'text', text: `Invalid timestamp: "${args.schedule_value}". Use ISO 8601 format like "2026-02-01T15:30:00".` }],
-                isError: true
-              };
-            }
-          }
-
-          // Non-main groups can only schedule for themselves
-          const targetGroup = isMain && args.target_group ? args.target_group : groupFolder;
-
-          const data = {
-            type: 'schedule_task',
-            prompt: args.prompt,
-            schedule_type: args.schedule_type,
-            schedule_value: args.schedule_value,
-            context_mode: args.context_mode || 'group',
-            groupFolder: targetGroup,
-            chatJid,
-            createdBy: groupFolder,
-            timestamp: new Date().toISOString()
-          };
-
-          const filename = writeIpcFile(TASKS_DIR, data);
-
-          return {
-            content: [{
-              type: 'text',
-              text: `Task scheduled (${filename}): ${args.schedule_type} - ${args.schedule_value}`
-            }]
-          };
-        }
-      ),
-
-      // Reads from current_tasks.json which host keeps updated
-      tool(
-        'list_tasks',
-        'List all scheduled tasks. From main: shows all tasks. From other groups: shows only that group\'s tasks.',
-        {},
-        async () => {
-          const tasksFile = path.join(IPC_DIR, 'current_tasks.json');
-
+        // 验证 schedule_value
+        if (scheduleType === 'cron') {
           try {
-            if (!fs.existsSync(tasksFile)) {
-              return {
-                content: [{
-                  type: 'text',
-                  text: 'No scheduled tasks found.'
-                }]
-              };
-            }
-
-            const allTasks = JSON.parse(fs.readFileSync(tasksFile, 'utf-8'));
-
-            const tasks = isMain
-              ? allTasks
-              : allTasks.filter((t: { groupFolder: string }) => t.groupFolder === groupFolder);
-
-            if (tasks.length === 0) {
-              return {
-                content: [{
-                  type: 'text',
-                  text: 'No scheduled tasks found.'
-                }]
-              };
-            }
-
-            const formatted = tasks.map((t: { id: string; prompt: string; schedule_type: string; schedule_value: string; status: string; next_run: string }) =>
-              `- [${t.id}] ${t.prompt.slice(0, 50)}... (${t.schedule_type}: ${t.schedule_value}) - ${t.status}, next: ${t.next_run || 'N/A'}`
-            ).join('\n');
-
+            CronExpressionParser.parse(scheduleValue);
+          } catch {
             return {
-              content: [{
-                type: 'text',
-                text: `Scheduled tasks:\n${formatted}`
-              }]
-            };
-          } catch (err) {
-            return {
-              content: [{
-                type: 'text',
-                text: `Error reading tasks: ${err instanceof Error ? err.message : String(err)}`
-              }]
-            };
-          }
-        }
-      ),
-
-      tool(
-        'pause_task',
-        'Pause a scheduled task. It will not run until resumed.',
-        {
-          task_id: z.string().describe('The task ID to pause')
-        },
-        async (args: { task_id: string }) => {
-          const data = {
-            type: 'pause_task',
-            taskId: args.task_id,
-            groupFolder,
-            isMain,
-            timestamp: new Date().toISOString()
-          };
-
-          writeIpcFile(TASKS_DIR, data);
-
-          return {
-            content: [{
-              type: 'text',
-              text: `Task ${args.task_id} pause requested.`
-            }]
-          };
-        }
-      ),
-
-      tool(
-        'resume_task',
-        'Resume a paused task.',
-        {
-          task_id: z.string().describe('The task ID to resume')
-        },
-        async (args: { task_id: string }) => {
-          const data = {
-            type: 'resume_task',
-            taskId: args.task_id,
-            groupFolder,
-            isMain,
-            timestamp: new Date().toISOString()
-          };
-
-          writeIpcFile(TASKS_DIR, data);
-
-          return {
-            content: [{
-              type: 'text',
-              text: `Task ${args.task_id} resume requested.`
-            }]
-          };
-        }
-      ),
-
-      tool(
-        'cancel_task',
-        'Cancel and delete a scheduled task.',
-        {
-          task_id: z.string().describe('The task ID to cancel')
-        },
-        async (args: { task_id: string }) => {
-          const data = {
-            type: 'cancel_task',
-            taskId: args.task_id,
-            groupFolder,
-            isMain,
-            timestamp: new Date().toISOString()
-          };
-
-          writeIpcFile(TASKS_DIR, data);
-
-          return {
-            content: [{
-              type: 'text',
-              text: `Task ${args.task_id} cancellation requested.`
-            }]
-          };
-        }
-      ),
-
-      tool(
-        'register_group',
-        `Register a new chat group so the agent can respond to messages there. Main group only.
-
-Use available_groups.json to find the chat ID for a group. The folder name should be lowercase with hyphens (e.g., "family-chat").`,
-        {
-          jid: z.string().describe('The chat ID (e.g., "oc_xxxxxxxx")'),
-          name: z.string().describe('Display name for the group'),
-          folder: z.string().describe('Folder name for group files (lowercase, hyphens, e.g., "family-chat")'),
-          trigger: z.string().describe('Trigger word (e.g., "@Andy")')
-        },
-        async (args: { jid: string; name: string; folder: string; trigger: string }) => {
-          if (!isMain) {
-            return {
-              content: [{ type: 'text', text: 'Only the main group can register new groups.' }],
+              content: `Invalid cron: "${scheduleValue}". Use format like "0 9 * * *" (daily 9am).`,
               isError: true
             };
           }
+        } else if (scheduleType === 'interval') {
+          const ms = parseInt(scheduleValue, 10);
+          if (isNaN(ms) || ms <= 0) {
+            return {
+              content: `Invalid interval: "${scheduleValue}". Must be positive milliseconds.`,
+              isError: true
+            };
+          }
+        } else if (scheduleType === 'once') {
+          const date = new Date(scheduleValue);
+          if (isNaN(date.getTime())) {
+            return {
+              content: `Invalid timestamp: "${scheduleValue}". Use ISO 8601 format.`,
+              isError: true
+            };
+          }
+        }
 
-          const data = {
-            type: 'register_group',
-            jid: args.jid,
-            name: args.name,
-            folder: args.folder,
-            trigger: args.trigger,
-            timestamp: new Date().toISOString()
-          };
+        const targetGroup = isMain && args.target_group ? args.target_group as string : groupFolder;
 
-          writeIpcFile(TASKS_DIR, data);
+        const data = {
+          type: 'schedule_task',
+          prompt: args.prompt,
+          schedule_type: scheduleType,
+          schedule_value: scheduleValue,
+          context_mode: args.context_mode || 'group',
+          groupFolder: targetGroup,
+          chatJid,
+          createdBy: groupFolder,
+          timestamp: new Date().toISOString()
+        };
 
+        const filename = writeIpcFile(TASKS_DIR, data);
+        return { content: `Task scheduled (${filename}): ${scheduleType} - ${scheduleValue}` };
+      }
+
+      case 'list_tasks': {
+        const tasksFile = path.join(IPC_DIR, 'current_tasks.json');
+
+        try {
+          if (!fs.existsSync(tasksFile)) {
+            return { content: 'No scheduled tasks found.' };
+          }
+
+          const allTasks = JSON.parse(fs.readFileSync(tasksFile, 'utf-8'));
+          const tasks = isMain
+            ? allTasks
+            : allTasks.filter((t: { groupFolder: string }) => t.groupFolder === groupFolder);
+
+          if (tasks.length === 0) {
+            return { content: 'No scheduled tasks found.' };
+          }
+
+          const formatted = tasks.map((t: {
+            id: string;
+            prompt: string;
+            schedule_type: string;
+            schedule_value: string;
+            status: string;
+            next_run: string;
+          }) =>
+            `- [${t.id}] ${t.prompt.slice(0, 50)}... (${t.schedule_type}: ${t.schedule_value}) - ${t.status}, next: ${t.next_run || 'N/A'}`
+          ).join('\n');
+
+          return { content: `Scheduled tasks:\n${formatted}` };
+        } catch (err) {
           return {
-            content: [{
-              type: 'text',
-              text: `Group "${args.name}" registered. It will start receiving messages immediately.`
-            }]
+            content: `Error reading tasks: ${err instanceof Error ? err.message : String(err)}`,
+            isError: true
           };
         }
-      )
-    ]
-  });
-}
-
-// ==================== Session Management ====================
-
-interface SessionEntry {
-  sessionId: string;
-  fullPath: string;
-  summary: string;
-  firstPrompt: string;
-}
-
-interface SessionsIndex {
-  entries: SessionEntry[];
-}
-
-function getSessionSummary(sessionId: string, transcriptPath: string): string | null {
-  const projectDir = path.dirname(transcriptPath);
-  const indexPath = path.join(projectDir, 'sessions-index.json');
-
-  if (!fs.existsSync(indexPath)) {
-    logger.debug({ indexPath }, 'Sessions index not found');
-    return null;
-  }
-
-  try {
-    const index: SessionsIndex = JSON.parse(fs.readFileSync(indexPath, 'utf-8'));
-    const entry = index.entries.find(e => e.sessionId === sessionId);
-    if (entry?.summary) {
-      return entry.summary;
-    }
-  } catch (err) {
-    logger.error({ err }, 'Failed to read sessions index');
-  }
-
-  return null;
-}
-
-// ==================== Conversation Archiving ====================
-
-interface ParsedMessage {
-  role: 'user' | 'assistant';
-  content: string;
-}
-
-function parseTranscript(content: string): ParsedMessage[] {
-  const messages: ParsedMessage[] = [];
-
-  for (const line of content.split('\n')) {
-    if (!line.trim()) continue;
-    try {
-      const entry = JSON.parse(line);
-      if (entry.type === 'user' && entry.message?.content) {
-        const text = typeof entry.message.content === 'string'
-          ? entry.message.content
-          : entry.message.content.map((c: { text?: string }) => c.text || '').join('');
-        if (text) messages.push({ role: 'user', content: text });
-      } else if (entry.type === 'assistant' && entry.message?.content) {
-        const textParts = entry.message.content
-          .filter((c: { type: string }) => c.type === 'text')
-          .map((c: { text: string }) => c.text);
-        const text = textParts.join('');
-        if (text) messages.push({ role: 'assistant', content: text });
-      }
-    } catch {
-      // Skip invalid lines
-    }
-  }
-
-  return messages;
-}
-
-function formatTranscriptMarkdown(messages: ParsedMessage[], title?: string | null): string {
-  const now = new Date();
-  const formatDateTime = (d: Date) => d.toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true
-  });
-
-  const lines: string[] = [];
-  lines.push(`# ${title || 'Conversation'}`);
-  lines.push('');
-  lines.push(`Archived: ${formatDateTime(now)}`);
-  lines.push('');
-  lines.push('---');
-  lines.push('');
-
-  for (const msg of messages) {
-    const sender = msg.role === 'user' ? 'User' : 'Assistant';
-    const content = msg.content.length > 2000
-      ? msg.content.slice(0, 2000) + '...'
-      : msg.content;
-    lines.push(`**${sender}**: ${content}`);
-    lines.push('');
-  }
-
-  return lines.join('\n');
-}
-
-function sanitizeFilename(summary: string): string {
-  return summary
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 50);
-}
-
-function generateFallbackName(): string {
-  const time = new Date();
-  return `conversation-${time.getHours().toString().padStart(2, '0')}${time.getMinutes().toString().padStart(2, '0')}`;
-}
-
-function createPreCompactHook(groupFolder: string): HookCallback {
-  return async (input: unknown, _toolUseId: string | undefined, _context: unknown) => {
-    const preCompact = input as PreCompactHookInput;
-    const transcriptPath = preCompact.transcript_path;
-    const sessionId = preCompact.session_id;
-
-    if (!transcriptPath || !fs.existsSync(transcriptPath)) {
-      logger.debug('No transcript found for archiving');
-      return {};
-    }
-
-    try {
-      const content = fs.readFileSync(transcriptPath, 'utf-8');
-      const messages = parseTranscript(content);
-
-      if (messages.length === 0) {
-        logger.debug('No messages to archive');
-        return {};
       }
 
-      const summary = getSessionSummary(sessionId, transcriptPath);
-      const name = summary ? sanitizeFilename(summary) : generateFallbackName();
+      case 'pause_task': {
+        const data = {
+          type: 'pause_task',
+          taskId: args.task_id,
+          groupFolder,
+          isMain,
+          timestamp: new Date().toISOString()
+        };
+        writeIpcFile(TASKS_DIR, data);
+        return { content: `Task ${args.task_id} pause requested.` };
+      }
 
-      const conversationsDir = path.join(GROUPS_DIR, groupFolder, 'conversations');
-      fs.mkdirSync(conversationsDir, { recursive: true });
+      case 'resume_task': {
+        const data = {
+          type: 'resume_task',
+          taskId: args.task_id,
+          groupFolder,
+          isMain,
+          timestamp: new Date().toISOString()
+        };
+        writeIpcFile(TASKS_DIR, data);
+        return { content: `Task ${args.task_id} resume requested.` };
+      }
 
-      const date = new Date().toISOString().split('T')[0];
-      const filename = `${date}-${name}.md`;
-      const filePath = path.join(conversationsDir, filename);
+      case 'cancel_task': {
+        const data = {
+          type: 'cancel_task',
+          taskId: args.task_id,
+          groupFolder,
+          isMain,
+          timestamp: new Date().toISOString()
+        };
+        writeIpcFile(TASKS_DIR, data);
+        return { content: `Task ${args.task_id} cancellation requested.` };
+      }
 
-      const markdown = formatTranscriptMarkdown(messages, summary);
-      fs.writeFileSync(filePath, markdown);
+      case 'register_group': {
+        if (!isMain) {
+          return {
+            content: 'Only the main group can register new groups.',
+            isError: true
+          };
+        }
 
-      logger.info({ filePath }, 'Archived conversation');
-    } catch (err) {
-      logger.error({ err }, 'Failed to archive transcript');
+        const data = {
+          type: 'register_group',
+          jid: args.jid,
+          name: args.name,
+          folder: args.folder,
+          trigger: args.trigger,
+          timestamp: new Date().toISOString()
+        };
+
+        writeIpcFile(TASKS_DIR, data);
+        return { content: `Group "${args.name}" registered. It will start receiving messages immediately.` };
+      }
+
+      case 'remember': {
+        memoryManager.remember(groupFolder, args.key as string, args.value as string);
+        return { content: `已记住: ${args.key} = ${args.value}` };
+      }
+
+      case 'recall': {
+        const value = memoryManager.recall(groupFolder, args.key as string | undefined);
+        if (!value) {
+          return { content: args.key ? `没有找到关于 "${args.key}" 的记忆。` : '没有保存的记忆。' };
+        }
+        return { content: args.key ? `${args.key}: ${value}` : `保存的记忆:\n${value}` };
+      }
+
+      default:
+        return {
+          content: `Unknown tool: ${name}`,
+          isError: true
+        };
     }
-
-    return {};
   };
+}
+
+// ==================== 全局实例 ====================
+
+// 全局记忆管理器实例
+let globalMemoryManager: MemoryManager | null = null;
+
+/**
+ * 获取全局记忆管理器
+ */
+export function getMemoryManager(): MemoryManager {
+  if (!globalMemoryManager) {
+    globalMemoryManager = createMemoryManager(DATA_DIR);
+  }
+  return globalMemoryManager;
+}
+
+// 全局 API 客户端实例
+let globalApiClient: ApiClient | null = null;
+
+/**
+ * 获取全局 API 客户端
+ */
+export function getApiClient(): ApiClient | null {
+  if (!globalApiClient) {
+    globalApiClient = createApiClient();
+  }
+  return globalApiClient;
 }
 
 // ==================== Retry Configuration ====================
@@ -557,6 +535,56 @@ async function sleep(ms: number): Promise<void> {
 
 // ==================== Agent Execution ====================
 
+/**
+ * 获取群组的系统提示词
+ */
+function getGroupSystemPrompt(group: RegisteredGroup, isMain: boolean, isScheduledTask?: boolean): string {
+  const memoryManager = getMemoryManager();
+  
+  // 读取群组的 CLAUDE.md 文件（如果存在）
+  const groupDir = path.join(GROUPS_DIR, group.folder);
+  const claudeMdPath = path.join(groupDir, 'CLAUDE.md');
+  let basePrompt = '';
+  
+  if (fs.existsSync(claudeMdPath)) {
+    basePrompt = fs.readFileSync(claudeMdPath, 'utf-8');
+  } else {
+    // 默认系统提示词
+    basePrompt = `你是 FlashClaw，一个智能助手。
+    
+你正在 "${group.name}" 群组中与用户交流。
+
+你可以使用以下工具：
+- send_message: 发送消息到当前聊天
+- schedule_task: 安排定时任务
+- list_tasks: 列出所有定时任务
+- pause_task/resume_task/cancel_task: 管理定时任务
+- remember: 记住重要信息（长期记忆）
+- recall: 回忆之前保存的信息
+
+请用中文回复，除非用户使用其他语言。
+保持回复简洁、有帮助。`;
+  }
+  
+  // 构建包含长期记忆的系统提示词
+  let systemPrompt = memoryManager.buildSystemPrompt(group.folder, basePrompt);
+  
+  // 添加权限说明
+  if (isMain) {
+    systemPrompt += '\n\n你拥有管理员权限，可以注册新群组和管理所有任务。';
+  }
+  
+  // 添加定时任务上下文
+  if (isScheduledTask) {
+    systemPrompt += '\n\n[SCHEDULED TASK - 你是自动运行的，不是响应用户消息。如需与用户沟通，请使用 send_message 工具。]';
+  }
+  
+  return systemPrompt;
+}
+
+/**
+ * 运行 Agent（带重试）
+ */
 export async function runAgent(
   group: RegisteredGroup,
   input: AgentInput,
@@ -600,12 +628,28 @@ export async function runAgent(
   };
 }
 
+/**
+ * 单次运行 Agent
+ */
 async function runAgentOnce(
   group: RegisteredGroup,
   input: AgentInput,
   attempt: number = 0
 ): Promise<AgentOutput> {
   const startTime = Date.now();
+
+  // 获取 API 客户端
+  const apiClient = getApiClient();
+  if (!apiClient) {
+    return {
+      status: 'error',
+      result: null,
+      error: 'API client not configured. Set ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY environment variable.'
+    };
+  }
+
+  // 获取记忆管理器
+  const memoryManager = getMemoryManager();
 
   const groupDir = path.join(GROUPS_DIR, group.folder);
   fs.mkdirSync(groupDir, { recursive: true });
@@ -620,31 +664,99 @@ async function runAgentOnce(
   logger.info({
     group: group.name,
     isMain: input.isMain,
-    hasSession: !!input.sessionId,
-    attempt
+    attempt,
+    timeout
   }, 'Starting agent');
 
-  // Create IPC MCP server
-  const ipcMcp = createIpcMcp({
-    chatJid: input.chatJid,
-    groupFolder: group.folder,
-    isMain: input.isMain
-  });
+  // 创建工具执行器
+  const toolExecutor = createToolExecutor(
+    {
+      chatJid: input.chatJid,
+      groupFolder: group.folder,
+      isMain: input.isMain
+    },
+    memoryManager
+  );
 
-  let result: string | null = null;
-  let newSessionId: string | undefined;
-
-  // Add context for scheduled tasks
-  let prompt = input.prompt;
-  if (input.isScheduledTask) {
-    prompt = `[SCHEDULED TASK - You are running automatically, not in response to a user message. Use mcp__flashclaw__send_message if needed to communicate with the user.]\n\n${input.prompt}`;
+  // 获取对话上下文
+  const context = memoryManager.getContext(group.folder);
+  
+  // 检查当前模型是否支持图片输入
+  const supportsVision = currentModelSupportsVision();
+  const currentModel = getCurrentModelId();
+  
+  // 构建用户消息内容（支持图片附件）
+  let userContent: ChatMessage['content'];
+  
+  if (input.attachments && input.attachments.length > 0 && supportsVision) {
+    // 有图片附件，构建多内容块
+    const contentBlocks: (TextBlock | ImageBlock)[] = [];
+    
+    // 添加文本
+    if (input.prompt) {
+      contentBlocks.push({ type: 'text', text: input.prompt });
+    }
+    
+    // 添加图片
+    for (const attachment of input.attachments) {
+      if (attachment.type === 'image' && attachment.content) {
+        // 从 data URL 提取 base64 数据
+        let base64Data = attachment.content;
+        let mimeType = attachment.mimeType || 'image/png';
+        
+        if (attachment.content.startsWith('data:')) {
+          const match = attachment.content.match(/^data:([^;]+);base64,(.*)$/);
+          if (match) {
+            mimeType = match[1];
+            base64Data = match[2];
+          }
+        }
+        
+        contentBlocks.push({
+          type: 'image',
+          source: {
+            type: 'base64',
+            media_type: mimeType as 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp',
+            data: base64Data
+          }
+        });
+      }
+    }
+    
+    userContent = contentBlocks;
+    logger.info({ 
+      group: group.name, 
+      model: currentModel,
+      textBlocks: contentBlocks.filter(b => b.type === 'text').length,
+      imageBlocks: contentBlocks.filter(b => b.type === 'image').length 
+    }, '📷 处理图片消息');
+  } else if (input.attachments && input.attachments.length > 0 && !supportsVision) {
+    // 模型不支持图片，只发送文本
+    userContent = input.prompt + `\n\n[用户发送了 ${input.attachments.length} 张图片，但当前模型 ${currentModel} 不支持图片输入]`;
+    logger.info({ 
+      group: group.name, 
+      model: currentModel,
+      imageCount: input.attachments.length 
+    }, '⚠️ 当前模型不支持图片输入');
+  } else {
+    // 纯文本消息
+    userContent = input.prompt;
   }
+  
+  // 添加当前用户消息
+  const userMessage: ChatMessage = { role: 'user', content: userContent };
+  memoryManager.addMessage(group.folder, { role: 'user', content: input.prompt }); // 记忆中只存文本
 
-  // Determine working directory
-  // Main group can access the entire project, others only their group folder
-  const cwd = input.isMain ? process.cwd() : groupDir;
+  // 构建消息历史
+  const messages: ChatMessage[] = [...context, userMessage];
 
-  // Create a timeout promise
+  // 获取系统提示词
+  const systemPrompt = getGroupSystemPrompt(group, input.isMain, input.isScheduledTask);
+
+  // 获取工具定义
+  const tools = getBuiltinTools();
+
+  // 创建超时 Promise
   const timeoutPromise = new Promise<AgentOutput>((resolve) => {
     setTimeout(() => {
       logger.error({ group: group.name }, 'Agent timeout');
@@ -656,38 +768,45 @@ async function runAgentOnce(
     }, timeout);
   });
 
-  // Create the agent execution promise
+  // 创建 Agent 执行 Promise
   const agentPromise = (async (): Promise<AgentOutput> => {
     try {
-      for await (const message of query({
-        prompt,
-        options: {
-          cwd,
-          resume: input.sessionId,
-          allowedTools: [
-            'Bash',
-            'Read', 'Write', 'Edit', 'Glob', 'Grep',
-            'WebSearch', 'WebFetch',
-            'mcp__flashclaw__*'
-          ],
-          permissionMode: 'bypassPermissions',
-          settingSources: ['project'],
-          mcpServers: {
-            flashclaw: ipcMcp
-          },
-          hooks: {
-            PreCompact: [{ hooks: [createPreCompactHook(group.folder)] }]
-          }
-        }
-      })) {
-        if (message.type === 'system' && message.subtype === 'init') {
-          newSessionId = message.session_id;
-          logger.debug({ sessionId: newSessionId }, 'Session initialized');
-        }
+      // 调用 API
+      const response = await apiClient.chat(messages, {
+        system: systemPrompt,
+        tools,
+        maxTokens: 4096
+      });
 
-        if ('result' in message && message.result) {
-          result = message.result as string;
-        }
+      let result: string;
+
+      // 检查是否有工具调用
+      if (response.stop_reason === 'tool_use') {
+        // 处理工具调用
+        result = await apiClient.handleToolUse(
+          response,
+          messages,
+          async (name, params) => {
+            const toolResult = await toolExecutor(name, params);
+            if (toolResult.isError) {
+              throw new Error(toolResult.content);
+            }
+            return toolResult.content;
+          },
+          { system: systemPrompt, tools, maxTokens: 4096 }
+        );
+      } else {
+        // 直接提取文本响应
+        result = apiClient.extractText(response);
+      }
+
+      // 保存助手回复到记忆
+      memoryManager.addMessage(group.folder, { role: 'assistant', content: result });
+
+      // 检查是否需要压缩上下文
+      if (memoryManager.needsCompaction(group.folder)) {
+        logger.info({ group: group.name }, 'Compacting conversation context');
+        await memoryManager.compact(group.folder, apiClient);
       }
 
       const duration = Date.now() - startTime;
@@ -700,8 +819,7 @@ async function runAgentOnce(
 
       return {
         status: 'success',
-        result,
-        newSessionId
+        result
       };
 
     } catch (err) {
@@ -717,13 +835,12 @@ async function runAgentOnce(
       return {
         status: 'error',
         result: null,
-        newSessionId,
         error: errorMessage
       };
     }
   })();
 
-  // Race between agent execution and timeout
+  // 竞争：Agent 执行 vs 超时
   return Promise.race([agentPromise, timeoutPromise]);
 }
 

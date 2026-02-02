@@ -1,12 +1,18 @@
 /**
- * FlashClaw - Personal AI Assistant
- * Main entry point - Multi-platform messaging with AI agents
+ * FlashClaw 主入口
+ * ⚡ 闪电龙虾 - 快如闪电的 AI 助手
  */
 
+import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
 import pino from 'pino';
 
+import { pluginManager } from './plugins/manager.js';
+import { loadFromDir, watchPlugins } from './plugins/loader.js';
+import { ChannelPlugin, Message, MessageHandler, SendMessageResult } from './plugins/types.js';
+import { ApiClient, createApiClient } from './core/api-client.js';
+import { MemoryManager } from './core/memory.js';
 import {
   BOT_NAME,
   DATA_DIR,
@@ -28,23 +34,144 @@ import {
 import { startSchedulerLoop } from './task-scheduler.js';
 import { runAgent, writeTasksSnapshot, writeGroupsSnapshot, AvailableGroup } from './agent-runner.js';
 import { loadJson, saveJson } from './utils.js';
-import { createClientManager, ClientManager, Message } from './clients/index.js';
 import { MessageQueue, QueuedMessage } from './message-queue.js';
 
+// ⚡ FlashClaw Logger
 const logger = pino({
   level: process.env.LOG_LEVEL || 'info',
   transport: { target: 'pino-pretty', options: { colorize: true } }
 });
 
-// Global state
-let clientManager: ClientManager;
+// ==================== 渠道管理 ====================
+/**
+ * 渠道管理器 - 管理所有已启用的通讯渠道插件
+ */
+class ChannelManager {
+  private channels: ChannelPlugin[] = [];
+  private enabledPlatforms: string[] = [];
+  
+  async initialize(): Promise<void> {
+    this.channels = pluginManager.getActiveChannels();
+    this.enabledPlatforms = this.channels.map(c => c.name);
+    
+    if (this.channels.length === 0) {
+      throw new Error('没有启用任何通讯渠道');
+    }
+  }
+  
+  async start(onMessage: MessageHandler): Promise<void> {
+    for (const channel of this.channels) {
+      channel.onMessage(onMessage);
+      await channel.start();
+      logger.info({ channel: channel.name }, '⚡ 渠道已启动');
+    }
+  }
+  
+  async sendMessage(chatId: string, content: string, platform?: string): Promise<SendMessageResult> {
+    // 如果指定了平台，使用指定的渠道
+    if (platform) {
+      const channel = this.channels.find(c => c.name === platform);
+      if (channel) {
+        return await channel.sendMessage(chatId, content);
+      }
+    }
+    // 否则尝试所有渠道
+    for (const channel of this.channels) {
+      try {
+        return await channel.sendMessage(chatId, content);
+      } catch {
+        continue;
+      }
+    }
+    return { success: false, error: `无法发送消息到 ${chatId}` };
+  }
+  
+  async updateMessage(messageId: string, content: string, platform?: string): Promise<void> {
+    // 如果指定了平台，使用指定的渠道
+    if (platform) {
+      const channel = this.channels.find(c => c.name === platform);
+      if (channel?.updateMessage) {
+        await channel.updateMessage(messageId, content);
+        return;
+      }
+    }
+    // 尝试所有支持更新的渠道
+    for (const channel of this.channels) {
+      if (channel.updateMessage) {
+        try {
+          await channel.updateMessage(messageId, content);
+          return;
+        } catch {
+          continue;
+        }
+      }
+    }
+  }
+  
+  async deleteMessage(messageId: string, platform?: string): Promise<void> {
+    if (platform) {
+      const channel = this.channels.find(c => c.name === platform);
+      if (channel?.deleteMessage) {
+        await channel.deleteMessage(messageId);
+        return;
+      }
+    }
+    for (const channel of this.channels) {
+      if (channel.deleteMessage) {
+        try {
+          await channel.deleteMessage(messageId);
+          return;
+        } catch {
+          continue;
+        }
+      }
+    }
+  }
+  
+  getEnabledPlatforms(): string[] {
+    return this.enabledPlatforms;
+  }
+  
+  getPlatformDisplayName(platform: string): string {
+    const names: Record<string, string> = {
+      'feishu': '飞书',
+      'dingtalk': '钉钉',
+    };
+    return names[platform] || platform;
+  }
+  
+  shouldRespondInGroup(msg: Message): boolean {
+    // 检查是否被 @ 或提到机器人名称
+    const botName = process.env.BOT_NAME || 'FlashClaw';
+    return msg.content.includes(`@${botName}`) || 
+           msg.content.toLowerCase().includes(botName.toLowerCase());
+  }
+}
+
+// ==================== 全局状态 ====================
+let channelManager: ChannelManager;
+let apiClient: ApiClient | null;
+let memoryManager: MemoryManager;
 let sessions: Session = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let messageQueue: MessageQueue<Message>;
 
 // 消息历史上下文配置
-const HISTORY_CONTEXT_LIMIT = 20; // 包含最近 20 条消息作为上下文
+const HISTORY_CONTEXT_LIMIT = 20;
+
+// "正在思考..." 提示配置
+const THINKING_THRESHOLD_MS = Number(process.env.THINKING_THRESHOLD_MS ?? 2500);
+
+// ==================== 状态管理 ====================
+
+// 默认的 main 群组配置模板（用于自动注册新会话）
+const DEFAULT_MAIN_GROUP: RegisteredGroup = {
+  name: 'main',
+  folder: MAIN_GROUP_FOLDER,
+  trigger: '@',  // 默认 @ 触发
+  added_at: new Date().toISOString()
+};
 
 function loadState(): void {
   const statePath = path.join(DATA_DIR, 'router_state.json');
@@ -52,7 +179,16 @@ function loadState(): void {
   lastAgentTimestamp = state.last_agent_timestamp || {};
   sessions = loadJson(path.join(DATA_DIR, 'sessions.json'), {});
   registeredGroups = loadJson(path.join(DATA_DIR, 'registered_groups.json'), {});
-  logger.info({ groupCount: Object.keys(registeredGroups).length }, 'State loaded');
+  
+  // 确保有 main 群组配置模板（用于自动注册）
+  const hasMainGroup = Object.values(registeredGroups).some(g => g.folder === MAIN_GROUP_FOLDER);
+  if (!hasMainGroup) {
+    // 用占位符 ID 注册 main 模板，实际会话会在收到消息时动态注册
+    registeredGroups['__main_template__'] = DEFAULT_MAIN_GROUP;
+    logger.info('⚡ 已初始化 main 群组模板');
+  }
+  
+  logger.info({ groupCount: Object.keys(registeredGroups).length }, '⚡ 状态已加载');
 }
 
 function saveState(): void {
@@ -64,16 +200,15 @@ function registerGroup(chatId: string, group: RegisteredGroup): void {
   registeredGroups[chatId] = group;
   saveJson(path.join(DATA_DIR, 'registered_groups.json'), registeredGroups);
 
-  // Create group folder
+  // 创建群组文件夹
   const groupDir = path.join(DATA_DIR, '..', 'groups', group.folder);
   fs.mkdirSync(path.join(groupDir, 'logs'), { recursive: true });
 
-  logger.info({ chatId, name: group.name, folder: group.folder }, 'Group registered');
+  logger.info({ chatId, name: group.name, folder: group.folder }, '⚡ 群组已注册');
 }
 
 /**
- * Get available groups list for the agent.
- * Returns groups ordered by most recent activity.
+ * 获取可用群组列表
  */
 function getAvailableGroups(): AvailableGroup[] {
   const chats = getAllChats();
@@ -89,25 +224,25 @@ function getAvailableGroups(): AvailableGroup[] {
     }));
 }
 
+// ==================== 消息处理 ====================
 /**
- * Check if the message should trigger the agent
+ * 判断是否应该触发 Agent
  */
 function shouldTriggerAgent(msg: Message, group: RegisteredGroup): boolean {
   const isMainGroup = group.folder === MAIN_GROUP_FOLDER;
 
-  // Main group responds to all messages
+  // 主群组响应所有消息
   if (isMainGroup) {
     return true;
   }
 
-  // For other groups:
-  // 1. In private chat (p2p), always respond
+  // 私聊始终响应
   if (msg.chatType === 'p2p') {
     return true;
   }
 
-  // 2. In group chat, use smart detection
-  if (clientManager.shouldRespondInGroup(msg)) {
+  // 群聊使用智能检测
+  if (channelManager.shouldRespondInGroup(msg)) {
     return true;
   }
 
@@ -115,28 +250,33 @@ function shouldTriggerAgent(msg: Message, group: RegisteredGroup): boolean {
 }
 
 /**
- * Process a message from any platform (called by message queue)
+ * 处理队列中的消息
  */
 async function processQueuedMessage(queuedMsg: QueuedMessage<Message>): Promise<void> {
   const msg = queuedMsg.data;
   const chatId = msg.chatId;
   const group = registeredGroups[chatId];
 
+  logger.info({ chatId, msgId: msg.id }, '>>> 开始处理队列消息');
+
   if (!group) {
-    logger.debug({ chatId }, 'Group no longer registered, skipping');
+    logger.info({ chatId }, '群组未注册，跳过');
     return;
   }
 
-  // Get messages since last agent interaction
+  // 获取自上次交互以来的消息
   const sinceTimestamp = lastAgentTimestamp[chatId] || '';
+  logger.info({ chatId, sinceTimestamp }, '>>> 查询新消息');
+  
   const missedMessages = getMessagesSince(chatId, sinceTimestamp, BOT_NAME);
+  logger.info({ chatId, count: missedMessages.length }, '>>> 获取到消息数量');
 
   if (missedMessages.length === 0) {
-    logger.debug({ chatId }, 'No new messages to process');
+    logger.info({ chatId, sinceTimestamp }, '无新消息，可能时间戳问题');
     return;
   }
 
-  // 获取历史上下文（最近的消息，用于提供上下文）
+  // 获取历史上下文
   const historyMessages = getChatHistory(chatId, HISTORY_CONTEXT_LIMIT, sinceTimestamp);
   
   const escapeXml = (s: string) => s
@@ -160,45 +300,146 @@ async function processQueuedMessage(queuedMsg: QueuedMessage<Message>): Promise<
   );
   prompt += `<new_messages>\n${newLines.join('\n')}\n</new_messages>`;
 
+  // 提取图片附件（只处理当前消息的附件）
+  const imageAttachments = msg.attachments
+    ?.filter(a => a.type === 'image' && a.content)
+    .map(a => ({
+      type: 'image' as const,
+      content: a.content!,
+      mimeType: a.mimeType
+    })) || [];
+
   logger.info({ 
     group: group.name, 
     newMessages: missedMessages.length, 
     historyContext: historyMessages.length,
-    platform: msg.platform 
-  }, 'Processing message');
+    platform: msg.platform,
+    imageCount: imageAttachments.length
+  }, '⚡ 处理消息');
 
-  const response = await executeAgent(group, prompt, chatId);
+  // "正在思考..." 提示功能
+  let placeholderMessageId: string | undefined;
+  let thinkingDone = false;
+  
+  // 设置定时器，超过阈值时发送"正在思考..."
+  const thinkingTimer = THINKING_THRESHOLD_MS > 0 ? setTimeout(async () => {
+    if (thinkingDone) return;
+    try {
+      const result = await channelManager.sendMessage(chatId, `${BOT_NAME}: 正在思考...`, msg.platform);
+      if (result.success && result.messageId) {
+        placeholderMessageId = result.messageId;
+        logger.debug({ chatId, messageId: placeholderMessageId }, '已发送思考提示');
+      }
+    } catch {
+      // 忽略错误
+    }
+  }, THINKING_THRESHOLD_MS) : null;
 
-  if (response) {
-    lastAgentTimestamp[chatId] = msg.timestamp;
-    saveState();
-    await sendMessage(chatId, `${BOT_NAME}: ${response}`, msg.platform);
+  try {
+    const response = await executeAgent(group, prompt, chatId, {
+      attachments: imageAttachments.length > 0 ? imageAttachments : undefined
+    });
+    thinkingDone = true;
+    
+    if (thinkingTimer) {
+      clearTimeout(thinkingTimer);
+    }
+
+    if (response) {
+      lastAgentTimestamp[chatId] = msg.timestamp;
+      saveState();
+      
+      const finalText = `${BOT_NAME}: ${response}`;
+      
+      // 如果有占位消息，更新它；否则发送新消息
+      if (placeholderMessageId) {
+        try {
+          await channelManager.updateMessage(placeholderMessageId, finalText, msg.platform);
+          logger.info({ chatId, messageId: placeholderMessageId }, '⚡ 消息已更新');
+        } catch {
+          // 更新失败，尝试删除并发送新消息
+          try {
+            await channelManager.deleteMessage(placeholderMessageId, msg.platform);
+          } catch {}
+          await sendMessage(chatId, finalText, msg.platform);
+        }
+      } else {
+        await sendMessage(chatId, finalText, msg.platform);
+      }
+    } else if (placeholderMessageId) {
+      // 没有响应，删除占位消息
+      try {
+        await channelManager.deleteMessage(placeholderMessageId, msg.platform);
+      } catch {}
+    }
+  } catch (err) {
+    thinkingDone = true;
+    if (thinkingTimer) {
+      clearTimeout(thinkingTimer);
+    }
+    
+    // 删除占位消息
+    if (placeholderMessageId) {
+      try {
+        await channelManager.deleteMessage(placeholderMessageId, msg.platform);
+      } catch {}
+    }
+    
+    throw err;
   }
 }
 
 /**
- * Handle incoming message from any platform
+ * 处理传入消息
  */
 async function handleIncomingMessage(msg: Message): Promise<void> {
   const chatId = msg.chatId;
 
-  // Store chat metadata for discovery
+  // 存储聊天元数据
   storeChatMetadata(chatId, msg.timestamp);
 
-  // Check if this chat is registered
-  const group = registeredGroups[chatId];
+  // 获取群组配置
+  let group = registeredGroups[chatId];
+  
+  // 自动注册新会话（参考 openclaw 的动态 session key 设计）
   if (!group) {
-    logger.debug({ chatId, platform: msg.platform }, 'Message from unregistered chat, ignoring');
+    // 查找 main 群组配置作为模板
+    const mainGroup = Object.values(registeredGroups).find(g => g.folder === MAIN_GROUP_FOLDER);
+    if (mainGroup) {
+      group = mainGroup;
+      
+      // 根据聊天类型生成名称
+      const chatName = msg.chatType === 'p2p' 
+        ? `私聊-${msg.senderName || chatId.slice(-8)}`
+        : `群聊-${chatId.slice(-8)}`;
+      
+      // 动态注册此会话
+      registerGroup(chatId, {
+        ...mainGroup,
+        name: chatName,
+        added_at: new Date().toISOString()
+      });
+      
+      logger.info({ 
+        chatId, 
+        chatType: msg.chatType,
+        name: chatName 
+      }, '⚡ 会话已自动注册');
+    }
+  }
+  
+  if (!group) {
+    logger.debug({ chatId, platform: msg.platform, chatType: msg.chatType }, '未注册的聊天，忽略');
     return;
   }
 
-  // 去重检查：检查消息是否已存在于数据库
+  // 去重检查
   if (messageExists(msg.id, chatId)) {
-    logger.debug({ chatId, messageId: msg.id }, 'Duplicate message detected, ignoring');
+    logger.debug({ chatId, messageId: msg.id }, '重复消息，忽略');
     return;
   }
 
-  // Store the message
+  // 存储消息
   storeMessage({
     id: msg.id,
     chatId: chatId,
@@ -209,20 +450,29 @@ async function handleIncomingMessage(msg: Message): Promise<void> {
     isFromMe: false
   });
 
-  // Check trigger conditions
-  if (!shouldTriggerAgent(msg, group)) {
+  // 检查触发条件
+  const shouldTrigger = shouldTriggerAgent(msg, group);
+  logger.info({ chatId, shouldTrigger, chatType: msg.chatType }, '>>> 触发检查');
+  
+  if (!shouldTrigger) {
     return;
   }
 
-  // 添加到消息队列处理
+  // 添加到消息队列
+  logger.info({ chatId, msgId: msg.id }, '>>> 加入消息队列');
   await messageQueue.enqueue(chatId, msg.id, msg);
 }
 
-async function executeAgent(group: RegisteredGroup, prompt: string, chatId: string): Promise<string | null> {
+// ==================== Agent 执行 ====================
+interface ExecuteAgentOptions {
+  attachments?: { type: 'image'; content: string; mimeType?: string }[];
+}
+
+async function executeAgent(group: RegisteredGroup, prompt: string, chatId: string, options?: ExecuteAgentOptions): Promise<string | null> {
   const isMain = group.folder === MAIN_GROUP_FOLDER;
   const sessionId = sessions[group.folder];
 
-  // Update tasks snapshot for agent to read (filtered by group)
+  // 更新任务快照
   const tasks = getAllTasks();
   writeTasksSnapshot(group.folder, isMain, tasks.map(t => ({
     id: t.id,
@@ -234,7 +484,7 @@ async function executeAgent(group: RegisteredGroup, prompt: string, chatId: stri
     next_run: t.next_run
   })));
 
-  // Update available groups snapshot (main group only can see all groups)
+  // 更新可用群组快照
   const availableGroups = getAvailableGroups();
   writeGroupsSnapshot(group.folder, isMain, availableGroups, new Set(Object.keys(registeredGroups)));
 
@@ -244,7 +494,8 @@ async function executeAgent(group: RegisteredGroup, prompt: string, chatId: stri
       sessionId,
       groupFolder: group.folder,
       chatJid: chatId,
-      isMain
+      isMain,
+      attachments: options?.attachments
     });
 
     if (output.newSessionId) {
@@ -253,32 +504,33 @@ async function executeAgent(group: RegisteredGroup, prompt: string, chatId: stri
     }
 
     if (output.status === 'error') {
-      logger.error({ group: group.name, error: output.error }, 'Agent error');
+      logger.error({ group: group.name, error: output.error }, 'Agent 错误');
       return null;
     }
 
     return output.result;
   } catch (err) {
-    logger.error({ group: group.name, err }, 'Agent error');
+    logger.error({ group: group.name, err }, 'Agent 执行失败');
     return null;
   }
 }
 
+// ==================== 消息发送 ====================
 async function sendMessage(chatId: string, text: string, platform?: string): Promise<void> {
   try {
-    await clientManager.sendMessage(chatId, text, platform);
-    logger.info({ chatId, length: text.length, platform }, 'Message sent');
+    await channelManager.sendMessage(chatId, text, platform);
+    logger.info({ chatId, length: text.length, platform }, '⚡ 消息已发送');
   } catch (err) {
-    logger.error({ chatId, err, platform }, 'Failed to send message');
+    logger.error({ chatId, err, platform }, '发送消息失败');
   }
 }
 
+// ==================== IPC 处理 ====================
 function startIpcWatcher(): void {
   const ipcBaseDir = path.join(DATA_DIR, 'ipc');
   fs.mkdirSync(ipcBaseDir, { recursive: true });
 
   const processIpcFiles = async () => {
-    // Scan all group IPC directories (identity determined by directory)
     let groupFolders: string[];
     try {
       groupFolders = fs.readdirSync(ipcBaseDir).filter(f => {
@@ -286,7 +538,7 @@ function startIpcWatcher(): void {
         return stat.isDirectory() && f !== 'errors';
       });
     } catch (err) {
-      logger.error({ err }, 'Error reading IPC base directory');
+      logger.error({ err }, '读取 IPC 目录失败');
       setTimeout(processIpcFiles, IPC_POLL_INTERVAL);
       return;
     }
@@ -296,7 +548,7 @@ function startIpcWatcher(): void {
       const messagesDir = path.join(ipcBaseDir, sourceGroup, 'messages');
       const tasksDir = path.join(ipcBaseDir, sourceGroup, 'tasks');
 
-      // Process messages from this group's IPC directory
+      // 处理消息
       try {
         if (fs.existsSync(messagesDir)) {
           const messageFiles = fs.readdirSync(messagesDir).filter(f => f.endsWith('.json'));
@@ -305,18 +557,17 @@ function startIpcWatcher(): void {
             try {
               const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
               if (data.type === 'message' && data.chatJid && data.text) {
-                // Authorization: verify this group can send to this chatId
                 const targetGroup = registeredGroups[data.chatJid];
                 if (isMain || (targetGroup && targetGroup.folder === sourceGroup)) {
                   await sendMessage(data.chatJid, `${BOT_NAME}: ${data.text}`);
-                  logger.info({ chatId: data.chatJid, sourceGroup }, 'IPC message sent');
+                  logger.info({ chatId: data.chatJid, sourceGroup }, 'IPC 消息已发送');
                 } else {
-                  logger.warn({ chatId: data.chatJid, sourceGroup }, 'Unauthorized IPC message attempt blocked');
+                  logger.warn({ chatId: data.chatJid, sourceGroup }, '未授权的 IPC 消息被阻止');
                 }
               }
               fs.unlinkSync(filePath);
             } catch (err) {
-              logger.error({ file, sourceGroup, err }, 'Error processing IPC message');
+              logger.error({ file, sourceGroup, err }, '处理 IPC 消息失败');
               const errorDir = path.join(ipcBaseDir, 'errors');
               fs.mkdirSync(errorDir, { recursive: true });
               fs.renameSync(filePath, path.join(errorDir, `${sourceGroup}-${file}`));
@@ -324,10 +575,10 @@ function startIpcWatcher(): void {
           }
         }
       } catch (err) {
-        logger.error({ err, sourceGroup }, 'Error reading IPC messages directory');
+        logger.error({ err, sourceGroup }, '读取 IPC 消息目录失败');
       }
 
-      // Process tasks from this group's IPC directory
+      // 处理任务
       try {
         if (fs.existsSync(tasksDir)) {
           const taskFiles = fs.readdirSync(tasksDir).filter(f => f.endsWith('.json'));
@@ -335,11 +586,10 @@ function startIpcWatcher(): void {
             const filePath = path.join(tasksDir, file);
             try {
               const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-              // Pass source group identity to processTaskIpc for authorization
               await processTaskIpc(data, sourceGroup, isMain);
               fs.unlinkSync(filePath);
             } catch (err) {
-              logger.error({ file, sourceGroup, err }, 'Error processing IPC task');
+              logger.error({ file, sourceGroup, err }, '处理 IPC 任务失败');
               const errorDir = path.join(ipcBaseDir, 'errors');
               fs.mkdirSync(errorDir, { recursive: true });
               fs.renameSync(filePath, path.join(errorDir, `${sourceGroup}-${file}`));
@@ -347,7 +597,7 @@ function startIpcWatcher(): void {
           }
         }
       } catch (err) {
-        logger.error({ err, sourceGroup }, 'Error reading IPC tasks directory');
+        logger.error({ err, sourceGroup }, '读取 IPC 任务目录失败');
       }
     }
 
@@ -355,7 +605,7 @@ function startIpcWatcher(): void {
   };
 
   processIpcFiles();
-  logger.info('IPC watcher started (per-group namespaces)');
+  logger.info('⚡ IPC 监听已启动');
 }
 
 async function processTaskIpc(
@@ -368,7 +618,6 @@ async function processTaskIpc(
     context_mode?: string;
     groupFolder?: string;
     chatJid?: string;
-    // For register_group
     jid?: string;
     name?: string;
     folder?: string;
@@ -378,27 +627,24 @@ async function processTaskIpc(
   sourceGroup: string,
   isMain: boolean
 ): Promise<void> {
-  // Import db functions dynamically to avoid circular deps
   const { createTask, updateTask, deleteTask, getTaskById: getTask } = await import('./db.js');
   const { CronExpressionParser } = await import('cron-parser');
 
   switch (data.type) {
     case 'schedule_task':
       if (data.prompt && data.schedule_type && data.schedule_value && data.groupFolder) {
-        // Authorization: non-main groups can only schedule for themselves
         const targetGroup = data.groupFolder;
         if (!isMain && targetGroup !== sourceGroup) {
-          logger.warn({ sourceGroup, targetGroup }, 'Unauthorized schedule_task attempt blocked');
+          logger.warn({ sourceGroup, targetGroup }, '未授权的 schedule_task 被阻止');
           break;
         }
 
-        // Resolve the correct chat ID for the target group (don't trust IPC payload)
         const targetChatId = Object.entries(registeredGroups).find(
           ([, group]) => group.folder === targetGroup
         )?.[0];
 
         if (!targetChatId) {
-          logger.warn({ targetGroup }, 'Cannot schedule task: target group not registered');
+          logger.warn({ targetGroup }, '无法创建任务：目标群组未注册');
           break;
         }
 
@@ -410,20 +656,20 @@ async function processTaskIpc(
             const interval = CronExpressionParser.parse(data.schedule_value, { tz: TIMEZONE });
             nextRun = interval.next().toISOString();
           } catch {
-            logger.warn({ scheduleValue: data.schedule_value }, 'Invalid cron expression');
+            logger.warn({ scheduleValue: data.schedule_value }, '无效的 cron 表达式');
             break;
           }
         } else if (scheduleType === 'interval') {
           const ms = parseInt(data.schedule_value, 10);
           if (isNaN(ms) || ms <= 0) {
-            logger.warn({ scheduleValue: data.schedule_value }, 'Invalid interval');
+            logger.warn({ scheduleValue: data.schedule_value }, '无效的间隔值');
             break;
           }
           nextRun = new Date(Date.now() + ms).toISOString();
         } else if (scheduleType === 'once') {
           const scheduled = new Date(data.schedule_value);
           if (isNaN(scheduled.getTime())) {
-            logger.warn({ scheduleValue: data.schedule_value }, 'Invalid timestamp');
+            logger.warn({ scheduleValue: data.schedule_value }, '无效的时间戳');
             break;
           }
           nextRun = scheduled.toISOString();
@@ -445,7 +691,7 @@ async function processTaskIpc(
           status: 'active',
           created_at: new Date().toISOString()
         });
-        logger.info({ taskId, sourceGroup, targetGroup, contextMode }, 'Task created via IPC');
+        logger.info({ taskId, sourceGroup, targetGroup, contextMode }, '⚡ 任务已创建');
       }
       break;
 
@@ -454,9 +700,9 @@ async function processTaskIpc(
         const task = getTask(data.taskId);
         if (task && (isMain || task.group_folder === sourceGroup)) {
           updateTask(data.taskId, { status: 'paused' });
-          logger.info({ taskId: data.taskId, sourceGroup }, 'Task paused via IPC');
+          logger.info({ taskId: data.taskId, sourceGroup }, '任务已暂停');
         } else {
-          logger.warn({ taskId: data.taskId, sourceGroup }, 'Unauthorized task pause attempt');
+          logger.warn({ taskId: data.taskId, sourceGroup }, '未授权的任务暂停操作');
         }
       }
       break;
@@ -466,9 +712,9 @@ async function processTaskIpc(
         const task = getTask(data.taskId);
         if (task && (isMain || task.group_folder === sourceGroup)) {
           updateTask(data.taskId, { status: 'active' });
-          logger.info({ taskId: data.taskId, sourceGroup }, 'Task resumed via IPC');
+          logger.info({ taskId: data.taskId, sourceGroup }, '任务已恢复');
         } else {
-          logger.warn({ taskId: data.taskId, sourceGroup }, 'Unauthorized task resume attempt');
+          logger.warn({ taskId: data.taskId, sourceGroup }, '未授权的任务恢复操作');
         }
       }
       break;
@@ -478,17 +724,16 @@ async function processTaskIpc(
         const task = getTask(data.taskId);
         if (task && (isMain || task.group_folder === sourceGroup)) {
           deleteTask(data.taskId);
-          logger.info({ taskId: data.taskId, sourceGroup }, 'Task cancelled via IPC');
+          logger.info({ taskId: data.taskId, sourceGroup }, '任务已取消');
         } else {
-          logger.warn({ taskId: data.taskId, sourceGroup }, 'Unauthorized task cancel attempt');
+          logger.warn({ taskId: data.taskId, sourceGroup }, '未授权的任务取消操作');
         }
       }
       break;
 
     case 'register_group':
-      // Only main group can register new groups
       if (!isMain) {
-        logger.warn({ sourceGroup }, 'Unauthorized register_group attempt blocked');
+        logger.warn({ sourceGroup }, '未授权的 register_group 被阻止');
         break;
       }
       if (data.jid && data.name && data.folder && data.trigger) {
@@ -500,19 +745,68 @@ async function processTaskIpc(
           agentConfig: data.agentConfig
         });
       } else {
-        logger.warn({ data }, 'Invalid register_group request - missing required fields');
+        logger.warn({ data }, '无效的 register_group 请求');
       }
       break;
 
     default:
-      logger.warn({ type: data.type }, 'Unknown IPC task type');
+      logger.warn({ type: data.type }, '未知的 IPC 任务类型');
   }
 }
 
-async function main(): Promise<void> {
-  // Initialize message clients (will throw if no platform configured)
+// ==================== 启动横幅 ====================
+function displayBanner(enabledPlatforms: string[], groupCount: number): void {
+  const platformsDisplay = enabledPlatforms.map(p => channelManager.getPlatformDisplayName(p)).join(' | ');
+  
+  const banner = `
+\x1b[33m
+  ███████╗██╗      █████╗ ███████╗██╗  ██╗ ██████╗██╗      █████╗ ██╗    ██╗
+  ██╔════╝██║     ██╔══██╗██╔════╝██║  ██║██╔════╝██║     ██╔══██╗██║    ██║
+  █████╗  ██║     ███████║███████╗███████║██║     ██║     ███████║██║ █╗ ██║
+  ██╔══╝  ██║     ██╔══██║╚════██║██╔══██║██║     ██║     ██╔══██║██║███╗██║
+  ██║     ███████╗██║  ██║███████║██║  ██║╚██████╗███████╗██║  ██║╚███╔███╔╝
+  ╚═╝     ╚══════╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝ ╚═════╝╚══════╝╚═╝  ╚═╝ ╚══╝╚══╝ 
+\x1b[0m
+\x1b[36m  ⚡ 闪电龙虾 - 快如闪电的 AI 助手\x1b[0m
+
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                                                                         │
+  │  \x1b[32m✓\x1b[0m 状态: \x1b[32m运行中\x1b[0m                                                        │
+  │  \x1b[32m✓\x1b[0m 模式: \x1b[33mDirect (Claude API)\x1b[0m                                           │
+  │  \x1b[32m✓\x1b[0m 平台: \x1b[36m${platformsDisplay.padEnd(55)}\x1b[0m│
+  │  \x1b[32m✓\x1b[0m 群组: \x1b[33m${String(groupCount).padEnd(55)}\x1b[0m│
+  │                                                                         │
+  │  \x1b[90m所有平台使用 WebSocket 长连接，无需公网服务器\x1b[0m                        │
+  │                                                                         │
+  └─────────────────────────────────────────────────────────────────────────┘
+
+  \x1b[90m按 Ctrl+C 停止服务\x1b[0m
+`;
+
+  console.log(banner);
+}
+
+// ==================== 主函数 ====================
+export async function main(): Promise<void> {
+  // 初始化 API 客户端
+  apiClient = createApiClient();
+  
+  // 初始化记忆管理器
+  memoryManager = new MemoryManager();
+  
+  // 加载插件
+  const pluginsDir = path.join(process.cwd(), 'plugins');
+  await loadFromDir(pluginsDir);
+  
+  // 启用热重载 - 工具插件会自动重载，渠道插件会忽略重载信号
+  watchPlugins(pluginsDir, (event, name) => {
+    logger.info({ event, plugin: name }, '⚡ 插件变化');
+  });
+
+  // 初始化渠道管理器
+  channelManager = new ChannelManager();
   try {
-    clientManager = createClientManager();
+    await channelManager.initialize();
   } catch (err) {
     console.error(`
 \x1b[31m
@@ -540,78 +834,52 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const enabledPlatforms = clientManager.getEnabledPlatforms();
-  logger.info({ platforms: enabledPlatforms }, 'Message clients initialized');
+  const enabledPlatforms = channelManager.getEnabledPlatforms();
+  logger.info({ platforms: enabledPlatforms }, '⚡ 渠道管理器已初始化');
 
-  // Initialize database
+  // 初始化数据库
   initDatabase();
-  logger.info('Database initialized');
+  logger.info('⚡ 数据库已初始化');
 
-  // Load state
+  // 加载状态
   loadState();
 
-  // Initialize message queue
+  // 初始化消息队列
   messageQueue = new MessageQueue<Message>(processQueuedMessage, {
     maxQueueSize: 100,
     maxConcurrent: 3,
-    processingTimeout: 300000,  // 5 minutes
+    processingTimeout: 300000,
     maxRetries: 2
   });
   messageQueue.start();
-  logger.info('Message queue initialized');
+  logger.info('⚡ 消息队列已初始化');
 
-  // Start task scheduler
+  // 启动任务调度器
   startSchedulerLoop({
     sendMessage: (chatId, text) => sendMessage(chatId, text),
     registeredGroups: () => registeredGroups,
     getSessions: () => sessions
   });
 
-  // Start IPC watcher
+  // 启动 IPC 监听
   startIpcWatcher();
 
-  // Start all message clients
-  clientManager.start(handleIncomingMessage);
+  // 启动所有渠道插件
+  await channelManager.start(handleIncomingMessage);
 
-  // Display startup banner
-  const platformsDisplay = enabledPlatforms.map(p => clientManager.getPlatformDisplayName(p)).join(' | ');
+  // 显示启动横幅
   const groupCount = Object.keys(registeredGroups).length;
-  
-  const banner = `
-\x1b[33m
-  ███████╗██╗      █████╗ ███████╗██╗  ██╗ ██████╗██╗      █████╗ ██╗    ██╗
-  ██╔════╝██║     ██╔══██╗██╔════╝██║  ██║██╔════╝██║     ██╔══██╗██║    ██║
-  █████╗  ██║     ███████║███████╗███████║██║     ██║     ███████║██║ █╗ ██║
-  ██╔══╝  ██║     ██╔══██║╚════██║██╔══██║██║     ██║     ██╔══██║██║███╗██║
-  ██║     ███████╗██║  ██║███████║██║  ██║╚██████╗███████╗██║  ██║╚███╔███╔╝
-  ╚═╝     ╚══════╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝ ╚═════╝╚══════╝╚═╝  ╚═╝ ╚══╝╚══╝ 
-\x1b[0m
-\x1b[36m  ⚡ 多平台个人 AI 助手 - 快速、安全、可扩展\x1b[0m
-
-  ┌─────────────────────────────────────────────────────────────────────────┐
-  │                                                                         │
-  │  \x1b[32m✓\x1b[0m 状态: \x1b[32m运行中\x1b[0m                                                        │
-  │  \x1b[32m✓\x1b[0m 模式: \x1b[33mDirect (Claude Agent SDK)\x1b[0m                                    │
-  │  \x1b[32m✓\x1b[0m 平台: \x1b[36m${platformsDisplay.padEnd(55)}\x1b[0m│
-  │  \x1b[32m✓\x1b[0m 群组: \x1b[33m${String(groupCount).padEnd(55)}\x1b[0m│
-  │                                                                         │
-  │  \x1b[90m所有平台使用 WebSocket 长连接，无需公网服务器\x1b[0m                        │
-  │                                                                         │
-  └─────────────────────────────────────────────────────────────────────────┘
-
-  \x1b[90m按 Ctrl+C 停止服务\x1b[0m
-`;
-
-  console.log(banner);
+  displayBanner(enabledPlatforms, groupCount);
 
   logger.info({ 
     mode: 'direct',
     platforms: enabledPlatforms,
     groups: groupCount
-  }, 'FlashClaw started');
+  }, '⚡ FlashClaw 已启动');
 }
 
+// 直接运行时启动
 main().catch(err => {
-  logger.error({ err }, 'Failed to start FlashClaw');
+  logger.error({ err }, '⚡ FlashClaw 启动失败');
   process.exit(1);
 });

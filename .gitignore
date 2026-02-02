@@ -22,3 +22,6 @@ logs/
 .cursor/
 
 agents-sdk-docs
+
+# Reference projects
+openclaw-main/

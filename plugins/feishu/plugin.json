@@ -1,0 +1,22 @@
+{
+  "name": "feishu",
+  "version": "1.0.0",
+  "type": "channel",
+  "description": "飞书通讯渠道插件",
+  "author": "FlashClaw",
+  "main": "index.ts",
+  "config": {
+    "appId": {
+      "type": "string",
+      "required": true,
+      "env": "FEISHU_APP_ID"
+    },
+    "appSecret": {
+      "type": "string",
+      "required": true,
+      "env": "FEISHU_APP_SECRET"
+    }
+  }
+}
+
+

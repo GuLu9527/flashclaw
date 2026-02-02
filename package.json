@@ -1,21 +1,51 @@
 {
   "name": "flashclaw",
   "version": "1.0.0",
-  "description": "多平台个人 AI 助手。支持飞书、钉钉，快速、安全、可扩展。",
+  "description": "⚡ 闪电龙虾 - 快如闪电的 AI 助手，乐高式插件架构",
   "type": "module",
   "main": "dist/index.js",
+  "bin": {
+    "flashclaw": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "plugins"
+  ],
   "scripts": {
     "build": "tsc",
-    "start": "node dist/index.js",
+    "start": "node dist/cli.js start",
     "dev": "tsx src/index.ts",
+    "cli": "tsx src/cli.ts",
     "typecheck": "tsc --noEmit"
   },
+  "keywords": [
+    "ai",
+    "assistant",
+    "chatbot",
+    "feishu",
+    "dingtalk",
+    "claude",
+    "plugin",
+    "flashclaw"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/GuLu9527/flashclaw.git"
+  },
+  "author": "GuLu9527",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.1.77",
+    "@anthropic-ai/sdk": "^0.72.1",
     "@larksuiteoapi/node-sdk": "^1.58.0",
     "better-sqlite3": "^11.8.1",
+    "chalk": "^5.6.2",
+    "commander": "^14.0.3",
     "cron-parser": "^5.5.0",
     "dotenv": "^17.2.3",
+    "jiti": "^2.6.1",
     "pino": "^9.6.0",
     "pino-pretty": "^13.0.0",
     "zod": "^4.3.6"
@@ -26,8 +56,5 @@
     "@types/ws": "^8.18.1",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
-  },
-  "engines": {
-    "node": ">=20"
   }
 }

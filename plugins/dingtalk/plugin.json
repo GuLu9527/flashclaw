@@ -1,0 +1,27 @@
+{
+  "name": "dingtalk",
+  "version": "1.0.0",
+  "type": "channel",
+  "description": "钉钉通讯渠道插件",
+  "author": "FlashClaw",
+  "main": "index.ts",
+  "config": {
+    "appKey": {
+      "type": "string",
+      "required": true,
+      "env": "DINGTALK_APP_KEY"
+    },
+    "appSecret": {
+      "type": "string",
+      "required": true,
+      "env": "DINGTALK_APP_SECRET"
+    },
+    "robotCode": {
+      "type": "string",
+      "required": false,
+      "env": "DINGTALK_ROBOT_CODE"
+    }
+  }
+}
+
+

@@ -1,0 +1,9 @@
+{
+  "name": "schedule-task",
+  "version": "1.0.0",
+  "type": "tool",
+  "description": "创建定时任务",
+  "main": "index.ts"
+}
+
+

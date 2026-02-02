@@ -19,7 +19,6 @@
 
 - Node.js 20+
 - npm 或 pnpm
-- Claude Code（可选，用于开发辅助）
 
 ### 初始化
 
@@ -40,14 +39,17 @@ cp .env.example .env
 ### 运行
 
 ```bash
-# 开发模式（热重载）
+# 开发模式（tsx 热重载）
 npm run dev
 
 # 编译
 npm run build
 
-# 生产运行
-npm start
+# 类型检查
+npm run typecheck
+
+# 使用 CLI
+npm run cli -- status
 ```
 
 ---
@@ -56,24 +58,39 @@ npm start
 
 ```
 flashclaw/
-├── src/                    # 源代码
-│   ├── index.ts           # 主入口
-│   ├── config.ts          # 配置常量
-│   ├── types.ts           # 类型定义
-│   ├── clients/           # 消息平台客户端
-│   │   ├── index.ts       # ClientManager
-│   │   ├── types.ts       # MessageClient 接口
-│   │   ├── feishu.ts      # 飞书客户端
-│   │   └── dingtalk.ts    # 钉钉客户端
-│   ├── agent-runner.ts    # AI Agent 运行器
-│   ├── message-queue.ts   # 消息队列
-│   ├── task-scheduler.ts  # 定时任务
-│   ├── db.ts              # 数据库操作
-│   └── utils.ts           # 工具函数
-├── .claude/skills/         # Claude Code 技能
-├── docs/                   # 文档
-├── groups/                 # 群组记忆（模板）
-└── assets/                 # 图片资源
+├── src/                       # 源代码
+│   ├── index.ts              # 主入口、消息路由
+│   ├── cli.ts                # CLI 命令行工具
+│   ├── agent-runner.ts       # AI Agent 运行器
+│   ├── config.ts             # 配置常量
+│   ├── types.ts              # 核心类型定义
+│   ├── db.ts                 # 数据库操作
+│   ├── message-queue.ts      # 消息队列
+│   ├── task-scheduler.ts     # 定时任务调度
+│   ├── utils.ts              # 工具函数
+│   │
+│   ├── core/                 # 核心模块
+│   │   ├── api-client.ts     # AI API 客户端
+│   │   ├── memory.ts         # 记忆管理
+│   │   └── model-capabilities.ts  # 模型能力检测
+│   │
+│   └── plugins/              # 插件系统
+│       ├── index.ts          # 插件系统入口
+│       ├── manager.ts        # 插件管理器
+│       ├── loader.ts         # 插件加载器
+│       └── types.ts          # 插件类型定义
+│
+├── plugins/                   # 插件目录
+│   ├── feishu/               # 飞书渠道插件
+│   ├── dingtalk/             # 钉钉渠道插件
+│   ├── send-message/         # 发送消息工具
+│   ├── schedule-task/        # 创建定时任务
+│   ├── list-tasks/           # 列出定时任务
+│   └── cancel-task/          # 取消定时任务
+│
+├── docs/                      # 文档
+├── groups/                    # 群组记忆（模板）
+└── assets/                    # 图片资源
 ```
 
 ---
@@ -91,8 +108,8 @@ git checkout -b fix/your-bug-fix
 ### 2. 开发
 
 - 修改代码
-- 添加测试（如果适用）
-- 确保 `npm run build` 通过
+- 确保 `npm run typecheck` 通过
+- 测试功能
 
 ### 3. 提交
 
@@ -124,10 +141,11 @@ git push origin feature/your-feature-name
 | 类型 | 规范 | 示例 |
 |------|------|------|
 | 文件名 | kebab-case | `agent-runner.ts` |
-| 类名 | PascalCase | `FeishuClient` |
-| 函数名 | camelCase | `createClient()` |
+| 类名 | PascalCase | `FeishuPlugin` |
+| 函数名 | camelCase | `sendMessage()` |
 | 常量 | UPPER_SNAKE | `BOT_NAME` |
-| 接口 | PascalCase | `MessageClient` |
+| 接口 | PascalCase | `ToolPlugin` |
+| 工具名 | snake_case | `send_message` |
 
 ### 文件大小
 
@@ -189,66 +207,149 @@ refactor: 重构消息队列实现
 
 ## 添加新功能
 
-### 添加新消息平台
+### 添加新消息平台（渠道插件）
 
-1. **创建客户端文件**
+1. **创建插件目录**
+
+   ```
+   plugins/telegram/
+   ├── plugin.json
+   └── index.ts
+   ```
+
+2. **编写 plugin.json**
+
+   ```json
+   {
+     "name": "telegram",
+     "version": "1.0.0",
+     "type": "channel",
+     "description": "Telegram 通讯渠道插件",
+     "main": "index.ts"
+   }
+   ```
+
+3. **实现渠道插件**
 
    ```typescript
-   // src/clients/telegram.ts
-   import { MessageClient, Message, MessageHandler } from './types.js';
+   // plugins/telegram/index.ts
+   import { ChannelPlugin, Message } from '../../src/plugins/types.js';
 
-   export class TelegramClient implements MessageClient {
-     readonly platform = 'telegram';
-     readonly displayName = 'Telegram';
+   const plugin: ChannelPlugin = {
+     name: 'telegram',
+     platform: 'telegram',
      
-     start(handler: MessageHandler): void { /* ... */ }
-     stop(): void { /* ... */ }
-     async sendTextMessage(chatId: string, text: string): Promise<void> { /* ... */ }
-     shouldRespondInGroup(message: Message): boolean { /* ... */ }
-     isBotMentioned(message: Message): boolean { /* ... */ }
-   }
+     async init(config) {
+       const token = config.TELEGRAM_BOT_TOKEN;
+       if (!token) {
+         throw new Error('缺少 TELEGRAM_BOT_TOKEN 配置');
+       }
+       // 初始化客户端...
+     },
+     
+     async start() {
+       // 启动消息监听
+     },
+     
+     async stop() {
+       // 停止监听
+     },
+     
+     onMessage(handler) {
+       this.messageHandler = handler;
+     },
+     
+     async sendMessage(chatId, content) {
+       // 发送消息
+       return { success: true, messageId: 'xxx' };
+     },
+     
+     shouldRespondInGroup(msg) {
+       // 检查是否应该响应群聊消息
+       return msg.mentions?.includes(this.botId) || false;
+     }
+   };
 
-   export function createTelegramClient(): TelegramClient | null {
-     const token = process.env.TELEGRAM_BOT_TOKEN;
-     if (!token) return null;
-     return new TelegramClient({ token });
-   }
+   export default plugin;
    ```
 
-2. **注册到 ClientManager**
-
-   ```typescript
-   // src/clients/index.ts
-   import { createTelegramClient } from './telegram.js';
-
-   // 在 initialize() 中添加
-   const telegramClient = createTelegramClient();
-   if (telegramClient) {
-     this.clients.push(telegramClient);
-   }
-   ```
-
-3. **更新配置示例**
+4. **更新配置示例**
 
    ```bash
    # .env.example
    # TELEGRAM_BOT_TOKEN=xxxxx
    ```
 
-4. **创建技能文档**
+### 添加新 AI 工具（工具插件）
 
-   ```markdown
-   <!-- .claude/skills/add-telegram/SKILL.md -->
-   # 添加 Telegram 支持
-   ...
+1. **创建插件目录**
+
+   ```
+   plugins/my-tool/
+   ├── plugin.json
+   └── index.ts
    ```
 
-### 添加新 MCP 工具
+2. **编写 plugin.json**
 
-1. 在 `src/agent-runner.ts` 的 `createIpcMcp()` 中添加新工具
-2. 使用 Zod 定义参数 schema
-3. 实现工具逻辑
-4. 更新 `docs/API.md`
+   ```json
+   {
+     "name": "my-tool",
+     "version": "1.0.0",
+     "type": "tool",
+     "description": "我的自定义工具",
+     "main": "index.ts"
+   }
+   ```
+
+3. **实现工具插件**
+
+   ```typescript
+   // plugins/my-tool/index.ts
+   import { ToolPlugin } from '../../src/plugins/types.js';
+
+   const plugin: ToolPlugin = {
+     name: 'my_tool',
+     description: '我的工具描述',
+     
+     schema: {
+       type: 'object',
+       properties: {
+         param1: {
+           type: 'string',
+           description: '参数1'
+         }
+       },
+       required: ['param1']
+     },
+     
+     async execute(params, context) {
+       const { param1 } = params;
+       // 执行逻辑...
+       return '执行结果';
+     }
+   };
+
+   export default plugin;
+   ```
+
+### 添加新模型支持
+
+在 `src/core/model-capabilities.ts` 中添加模型配置：
+
+```typescript
+const MODEL_CAPABILITIES: ModelCapabilities[] = [
+  // 添加新模型
+  {
+    pattern: /^my-model-/i,
+    provider: 'MyProvider',
+    input: ['text', 'image'],  // 支持的输入类型
+    contextWindow: 128000,
+    reasoning: false
+  },
+  // ... 其他模型
+];
+```
 
 ---
 
@@ -256,9 +357,8 @@ refactor: 重构消息队列实现
 
 如果遇到问题：
 
-1. 先查看 [常见问题](docs/FAQ.md)
-2. 搜索现有 [Issues](https://github.com/GuLu9527/flashclaw/issues)
-3. 创建新 Issue，包含：
+1. 搜索现有 [Issues](https://github.com/GuLu9527/flashclaw/issues)
+2. 创建新 Issue，包含：
    - 问题描述
    - 复现步骤
    - 环境信息（Node 版本、操作系统）

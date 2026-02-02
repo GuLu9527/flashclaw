@@ -4,44 +4,111 @@
 
 ## 目录
 
-- [消息客户端接口](#消息客户端接口)
+- [插件系统 API](#插件系统-api)
 - [Agent Runner API](#agent-runner-api)
 - [数据库 API](#数据库-api)
-- [IPC MCP 工具](#ipc-mcp-工具)
 - [消息队列 API](#消息队列-api)
+- [AI API 客户端](#ai-api-客户端)
+- [模型能力检测](#模型能力检测)
 
 ---
 
-## 消息客户端接口
+## 插件系统 API
 
-所有消息平台都需要实现 `MessageClient` 接口。
+FlashClaw 使用乐高式插件架构，所有扩展通过插件实现。
 
-### MessageClient 接口
+### 插件类型
 
 ```typescript
-// src/clients/types.ts
+// src/plugins/types.ts
 
-interface MessageClient {
-  /** 平台标识符 (如 'feishu', 'dingtalk') */
-  readonly platform: string;
+type PluginType = 'channel' | 'tool';
+
+interface PluginManifest {
+  name: string;
+  version: string;
+  type: PluginType;
+  description?: string;
+  main: string;
+}
+```
+
+### 工具插件接口
+
+```typescript
+interface ToolPlugin {
+  name: string;
+  description: string;
   
-  /** 平台显示名称 (如 '飞书', '钉钉') */
-  readonly displayName: string;
+  // Anthropic tool_use 格式的参数定义
+  schema: {
+    type: 'object';
+    properties: Record<string, {
+      type: string;
+      description: string;
+      enum?: string[];
+    }>;
+    required?: string[];
+  };
   
-  /** 启动消息监听 */
-  start(handler: MessageHandler): void;
+  // 执行函数
+  execute(
+    params: Record<string, unknown>,
+    context: ToolContext
+  ): Promise<string>;
   
-  /** 停止消息监听 */
-  stop(): void;
+  // 可选：热重载
+  reload?(): Promise<void>;
+}
+
+interface ToolContext {
+  chatId: string;
+  groupFolder: string;
+  isMain: boolean;
+  sendMessage: (chatId: string, text: string) => Promise<void>;
+}
+```
+
+### 渠道插件接口
+
+```typescript
+interface ChannelPlugin {
+  name: string;
+  platform: string;
   
-  /** 发送文本消息 */
-  sendTextMessage(chatId: string, text: string): Promise<void>;
+  // 生命周期
+  init(config: Record<string, string>): Promise<void>;
+  start(): Promise<void>;
+  stop(): Promise<void>;
   
-  /** 判断群聊中是否应该响应 (如 @提及检测) */
-  shouldRespondInGroup(message: Message): boolean;
+  // 消息处理
+  onMessage(handler: (msg: Message) => void): void;
   
-  /** 检测是否 @机器人 */
-  isBotMentioned(message: Message): boolean;
+  // 发送消息
+  sendMessage(
+    chatId: string,
+    content: string,
+    options?: SendMessageOptions
+  ): Promise<SendMessageResult>;
+  
+  // 可选方法
+  updateMessage?(messageId: string, content: string): Promise<void>;
+  deleteMessage?(messageId: string): Promise<void>;
+  sendImage?(chatId: string, imageData: string | Buffer, caption?: string): Promise<SendMessageResult>;
+  sendFile?(chatId: string, filePath: string, fileName?: string): Promise<SendMessageResult>;
+  shouldRespondInGroup?(msg: Message): boolean;
+  reload?(): Promise<void>;
+}
+
+interface SendMessageOptions {
+  placeholderMessageId?: string;
+  attachments?: Attachment[];
+}
+
+interface SendMessageResult {
+  messageId?: string;
+  success: boolean;
+  error?: string;
 }
 ```
 
@@ -49,24 +116,73 @@ interface MessageClient {
 
 ```typescript
 interface Message {
-  id: string;           // 消息唯一 ID
-  chatId: string;       // 聊天 ID
-  chatType: 'p2p' | 'group';  // 聊天类型
-  senderId: string;     // 发送者 ID
-  senderName: string;   // 发送者名称
-  content: string;      // 消息内容
-  timestamp: string;    // ISO 时间戳
-  platform: string;     // 平台标识
-  raw?: unknown;        // 原始消息数据
+  id: string;
+  chatId: string;
+  chatType: 'p2p' | 'group';
+  senderId: string;
+  senderName: string;
+  content: string;
+  timestamp: string;
+  platform: string;
+  
+  // 可选
+  attachments?: Attachment[];
+  mentions?: string[];
+  replyToMessageId?: string;
+  raw?: unknown;
+}
+
+interface Attachment {
+  type: 'image' | 'video' | 'audio' | 'file';
+  content?: string;       // Base64 内容
+  mimeType?: string;
+  fileName?: string;
+  fileKey?: string;       // 平台文件 Key
 }
 ```
 
-### 添加新平台
+### 插件管理器 API
 
-1. 创建 `src/clients/{platform}.ts`
-2. 实现 `MessageClient` 接口
-3. 导出 `create{Platform}Client()` 工厂函数
-4. 在 `src/clients/index.ts` 中注册
+```typescript
+// src/plugins/manager.ts
+
+class PluginManager {
+  // 注册插件
+  registerChannel(plugin: ChannelPlugin): void;
+  registerTool(plugin: ToolPlugin): void;
+  
+  // 注销插件
+  unregisterChannel(name: string): void;
+  unregisterTool(name: string): void;
+  
+  // 获取插件
+  getChannel(name: string): ChannelPlugin | undefined;
+  getTool(name: string): ToolPlugin | undefined;
+  getAllChannels(): ChannelPlugin[];
+  getAllTools(): ToolPlugin[];
+}
+```
+
+### 插件加载器 API
+
+```typescript
+// src/plugins/loader.ts
+
+// 初始化插件系统
+function initPlugins(): Promise<void>;
+
+// 加载单个插件
+function loadPlugin(pluginDir: string): Promise<void>;
+
+// 重载插件
+function reloadPlugin(name: string): Promise<boolean>;
+
+// 监听插件变化（热加载）
+function watchPlugins(
+  pluginsDir: string,
+  onChange?: (event: string, name: string) => void
+): void;
+```
 
 ---
 
@@ -81,44 +197,46 @@ Agent Runner 负责执行 AI Agent。
 
 async function runAgent(
   group: RegisteredGroup,
-  input: AgentInput,
-  retryConfig?: RetryConfig
-): Promise<AgentOutput>
+  input: AgentInput
+): Promise<string | null>
 ```
 
 #### AgentInput
 
 ```typescript
 interface AgentInput {
-  prompt: string;         // 用户消息/任务描述
-  sessionId?: string;     // 会话 ID (用于上下文连续)
-  groupFolder: string;    // 群组文件夹名
-  chatJid: string;        // 聊天 ID
-  isMain: boolean;        // 是否主群组
-  isScheduledTask?: boolean;  // 是否定时任务
+  prompt: string;
+  sessionId?: string;
+  groupFolder: string;
+  chatJid: string;
+  isMain: boolean;
+  attachments?: ImageAttachment[];
+}
+
+interface ImageAttachment {
+  type: 'image';
+  content: string;      // Base64 编码
+  mimeType?: string;    // 如 'image/png'
 }
 ```
 
-#### AgentOutput
+### 工具上下文写入
 
 ```typescript
-interface AgentOutput {
-  status: 'success' | 'error';
-  result: string | null;    // Agent 返回的结果
-  newSessionId?: string;    // 新会话 ID
-  error?: string;           // 错误信息
-}
-```
+// 写入任务快照供 Agent 读取
+function writeTasksSnapshot(
+  groupFolder: string,
+  isMain: boolean,
+  tasks: TaskSnapshot[]
+): void;
 
-#### RetryConfig
-
-```typescript
-interface RetryConfig {
-  maxRetries: number;       // 最大重试次数 (默认 3)
-  baseDelayMs: number;      // 基础延迟 (默认 1000ms)
-  maxDelayMs: number;       // 最大延迟 (默认 10000ms)
-  retryableErrors: string[];  // 可重试的错误关键词
-}
+// 写入群组快照供 Agent 读取
+function writeGroupsSnapshot(
+  groupFolder: string,
+  isMain: boolean,
+  groups: AvailableGroup[],
+  registeredIds: Set<string>
+): void;
 ```
 
 ---
@@ -130,103 +248,75 @@ FlashClaw 使用 SQLite 存储消息和任务。
 ### 消息相关
 
 ```typescript
+// src/db.ts
+
 // 存储消息
-storeMessage(msg: MessageInput): void
+function storeMessage(msg: MessageInput): void;
 
-// 获取指定时间后的消息
-getMessagesSince(chatJid: string, sinceTimestamp: string, botPrefix: string): NewMessage[]
+// 获取聊天历史
+function getChatHistory(
+  chatJid: string,
+  limit?: number,
+  beforeTimestamp?: string
+): StoredMessage[];
 
-// 获取聊天历史 (用于上下文)
-getChatHistory(chatJid: string, limit?: number, beforeTimestamp?: string): NewMessage[]
+// 检查消息是否存在（去重）
+function messageExists(messageId: string, chatJid: string): boolean;
 
-// 检查消息是否存在 (去重)
-messageExists(messageId: string, chatJid: string): boolean
+// 存储聊天元数据
+function storeChatMetadata(chatJid: string, lastMessageTime: string): void;
 
-// 获取消息统计
-getMessageStats(chatJid: string): { totalMessages: number; firstMessage: string | null; lastMessage: string | null }
+// 获取所有聊天
+function getAllChats(): ChatMetadata[];
 ```
 
 ### 任务相关
 
 ```typescript
 // 创建任务
-createTask(task: Omit<ScheduledTask, 'last_run' | 'last_result'>): void
+function createTask(task: Omit<ScheduledTask, 'last_run' | 'last_result'>): void;
 
 // 获取任务
-getTask(taskId: string): ScheduledTask | null
+function getTaskById(taskId: string): ScheduledTask | null;
 
 // 获取所有任务
-getAllTasks(): ScheduledTask[]
+function getAllTasks(): ScheduledTask[];
 
-// 更新任务
-updateTask(taskId: string, updates: Partial<ScheduledTask>): void
-
-// 删除任务
-deleteTask(taskId: string): void
+// 获取群组任务
+function getTasksByGroup(groupFolder: string): ScheduledTask[];
 
 // 获取待执行任务
-getDueTasks(): ScheduledTask[]
+function getDueTasks(): ScheduledTask[];
+
+// 更新任务执行状态
+function updateTaskAfterRun(taskId: string, result: string, nextRun: string | null): void;
+
+// 记录任务运行
+function logTaskRun(taskId: string, result: string, durationMs: number): void;
+
+// 删除任务
+function deleteTask(taskId: string): void;
+
+// 暂停/恢复任务
+function pauseTask(taskId: string): void;
+function resumeTask(taskId: string): void;
 ```
 
----
-
-## IPC MCP 工具
-
-Agent 可以通过 MCP 工具与主进程通信。
-
-### send_message
-
-发送消息到当前聊天。
+### ScheduledTask 类型
 
 ```typescript
-mcp__flashclaw__send_message({
-  text: string  // 要发送的消息
-})
-```
-
-### schedule_task
-
-创建定时任务。
-
-```typescript
-mcp__flashclaw__schedule_task({
-  prompt: string,           // 任务描述
-  schedule_type: 'cron' | 'interval' | 'once',
-  schedule_value: string,   // cron 表达式 / 毫秒数 / 时间戳
-  context_mode?: 'group' | 'isolated',  // 上下文模式
-  target_group?: string     // 目标群组 (仅主群组可用)
-})
-```
-
-### list_tasks
-
-列出所有定时任务。
-
-```typescript
-mcp__flashclaw__list_tasks()
-```
-
-### pause_task / resume_task / cancel_task
-
-管理任务状态。
-
-```typescript
-mcp__flashclaw__pause_task({ task_id: string })
-mcp__flashclaw__resume_task({ task_id: string })
-mcp__flashclaw__cancel_task({ task_id: string })
-```
-
-### register_group
-
-注册新群组 (仅主群组可用)。
-
-```typescript
-mcp__flashclaw__register_group({
-  jid: string,      // 聊天 ID
-  name: string,     // 显示名称
-  folder: string,   // 文件夹名
-  trigger: string   // 触发词
-})
+interface ScheduledTask {
+  id: string;
+  group_folder: string;
+  prompt: string;
+  schedule_type: 'cron' | 'interval' | 'once';
+  schedule_value: string;
+  status: 'active' | 'paused' | 'completed';
+  next_run: string;        // ISO 时间戳
+  last_run: string | null;
+  last_result: string | null;
+  created_at: string;
+}
 ```
 
 ---
@@ -244,30 +334,33 @@ class MessageQueue<T> {
   constructor(
     processor: (message: QueuedMessage<T>) => Promise<void>,
     config?: Partial<QueueConfig>
-  )
+  );
   
   // 启动队列
-  start(): void
+  start(): void;
   
   // 停止队列
-  stop(): void
+  stop(): void;
   
   // 添加消息到队列
-  enqueue(chatId: string, messageId: string, data: T): Promise<boolean>
+  enqueue(chatId: string, messageId: string, data: T): Promise<boolean>;
   
   // 获取统计信息
-  getStats(): QueueStats
+  getStats(): QueueStats;
 }
-```
 
-### QueueConfig
-
-```typescript
 interface QueueConfig {
   maxQueueSize: number;       // 每个聊天的最大队列长度 (默认 100)
   maxConcurrent: number;      // 最大并发处理数 (默认 5)
   processingTimeout: number;  // 处理超时时间 (默认 5 分钟)
   maxRetries: number;         // 最大重试次数 (默认 2)
+}
+
+interface QueuedMessage<T> {
+  chatId: string;
+  messageId: string;
+  data: T;
+  retryCount: number;
 }
 ```
 
@@ -280,14 +373,113 @@ interface QueueConfig {
 
 ---
 
+## AI API 客户端
+
+### ApiClient 类
+
+```typescript
+// src/core/api-client.ts
+
+class ApiClient {
+  constructor(config: ApiClientConfig);
+  
+  // 发送聊天请求
+  async chat(
+    messages: ChatMessage[],
+    tools?: ToolDefinition[],
+    systemPrompt?: string
+  ): Promise<ChatResponse>;
+}
+
+interface ApiClientConfig {
+  baseUrl: string;
+  authToken: string;
+  model: string;
+}
+
+interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: MessageContent;
+}
+
+// 支持多模态内容
+type MessageContent = string | (TextBlock | ImageBlock)[];
+
+interface TextBlock {
+  type: 'text';
+  text: string;
+}
+
+interface ImageBlock {
+  type: 'image';
+  source: {
+    type: 'base64';
+    media_type: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
+    data: string;
+  };
+}
+```
+
+---
+
+## 模型能力检测
+
+### 能力检测 API
+
+```typescript
+// src/core/model-capabilities.ts
+
+interface ModelCapabilities {
+  pattern: RegExp;
+  provider: string;
+  input: ('text' | 'image' | 'audio' | 'video')[];
+  contextWindow: number;
+  reasoning?: boolean;
+}
+
+// 查找模型能力
+function findModelCapabilities(modelId: string): ModelCapabilities | null;
+
+// 检查模型是否支持图片输入
+function modelSupportsVision(modelId: string): boolean;
+
+// 检查当前配置的模型是否支持图片输入
+function currentModelSupportsVision(): boolean;
+
+// 获取当前配置的模型 ID
+function getCurrentModelId(): string;
+```
+
+### 支持的模型
+
+| 提供商 | 模型模式 | 图片支持 |
+|--------|----------|----------|
+| Anthropic | claude-* | ✅ |
+| OpenAI | gpt-4o*, gpt-4-turbo* | ✅ |
+| OpenAI | gpt-4, gpt-3.5* | ❌ |
+| Google | gemini-* | ✅ |
+| MiniMax | MiniMax-* | ❌ |
+| 智谱 | glm-4v* | ✅ |
+| 智谱 | glm-4, glm-3* | ❌ |
+| 阿里 | qwen-vl* | ✅ |
+| 阿里 | qwen-* | ❌ |
+| DeepSeek | deepseek-* | ❌ |
+| Moonshot | moonshot-* | ❌ |
+
+---
+
 ## 环境变量
 
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
 | `LOG_LEVEL` | 日志级别 | `info` |
 | `BOT_NAME` | 机器人名称 | `FlashClaw` |
-| `DATA_DIR` | 数据目录 | `./data` |
+| `TIMEZONE` | 时区 | `Asia/Shanghai` |
 | `AGENT_TIMEOUT` | Agent 超时(ms) | `300000` |
+| `AI_MODEL` | AI 模型 | `claude-sonnet-4-20250514` |
+| `ANTHROPIC_BASE_URL` | API 地址 | `https://api.anthropic.com` |
+| `ANTHROPIC_AUTH_TOKEN` | API Token | - |
+| `ANTHROPIC_API_KEY` | API Key | - |
 | `FEISHU_APP_ID` | 飞书应用 ID | - |
 | `FEISHU_APP_SECRET` | 飞书应用密钥 | - |
 | `DINGTALK_APP_KEY` | 钉钉应用 Key | - |
