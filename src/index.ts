@@ -9,10 +9,10 @@ import path from 'path';
 import pino from 'pino';
 
 import { pluginManager } from './plugins/manager.js';
-import { loadFromDir, watchPlugins } from './plugins/loader.js';
+import { loadFromDir, watchPlugins, stopWatching } from './plugins/loader.js';
 import { ChannelPlugin, Message, MessageHandler, SendMessageResult } from './plugins/types.js';
-import { ApiClient, createApiClient } from './core/api-client.js';
-import { MemoryManager } from './core/memory.js';
+import { ApiClient, getApiClient } from './core/api-client.js';
+import { MemoryManager, getMemoryManager } from './core/memory.js';
 import {
   BOT_NAME,
   DATA_DIR,
@@ -31,7 +31,7 @@ import {
   getAllTasks,
   getAllChats
 } from './db.js';
-import { startSchedulerLoop } from './task-scheduler.js';
+import { startSchedulerLoop, stopScheduler } from './task-scheduler.js';
 import { runAgent, writeTasksSnapshot, writeGroupsSnapshot, AvailableGroup } from './agent-runner.js';
 import { loadJson, saveJson } from './utils.js';
 import { MessageQueue, QueuedMessage } from './message-queue.js';
@@ -161,7 +161,9 @@ let messageQueue: MessageQueue<Message>;
 const HISTORY_CONTEXT_LIMIT = 20;
 
 // "正在思考..." 提示配置
-const THINKING_THRESHOLD_MS = Number(process.env.THINKING_THRESHOLD_MS ?? 2500);
+// 注意：飞书不支持更新普通文本消息，所以默认禁用此功能
+// 如需启用，设置环境变量 THINKING_THRESHOLD_MS=2500（毫秒）
+const THINKING_THRESHOLD_MS = Number(process.env.THINKING_THRESHOLD_MS ?? 0);
 
 // ==================== 状态管理 ====================
 
@@ -241,7 +243,12 @@ function shouldTriggerAgent(msg: Message, group: RegisteredGroup): boolean {
     return true;
   }
 
-  // 群聊使用智能检测
+  // 群聊：如果有 mentions（被 @），说明渠道插件已经验证过了
+  if (msg.mentions && msg.mentions.length > 0) {
+    return true;
+  }
+
+  // 群聊使用智能检测（检查消息内容）
   if (channelManager.shouldRespondInGroup(msg)) {
     return true;
   }
@@ -337,7 +344,8 @@ async function processQueuedMessage(queuedMsg: QueuedMessage<Message>): Promise<
 
   try {
     const response = await executeAgent(group, prompt, chatId, {
-      attachments: imageAttachments.length > 0 ? imageAttachments : undefined
+      attachments: imageAttachments.length > 0 ? imageAttachments : undefined,
+      userId: msg.senderId  // 传递用户 ID 用于用户级别记忆
     });
     thinkingDone = true;
     
@@ -406,24 +414,35 @@ async function handleIncomingMessage(msg: Message): Promise<void> {
     // 查找 main 群组配置作为模板
     const mainGroup = Object.values(registeredGroups).find(g => g.folder === MAIN_GROUP_FOLDER);
     if (mainGroup) {
-      group = mainGroup;
-      
-      // 根据聊天类型生成名称
+      // 根据聊天类型生成名称和文件夹
       const chatName = msg.chatType === 'p2p' 
         ? `私聊-${msg.senderName || chatId.slice(-8)}`
         : `群聊-${chatId.slice(-8)}`;
       
-      // 动态注册此会话
-      registerGroup(chatId, {
+      // 为新会话创建独立的文件夹名称（使用 chatId 后8位确保唯一性）
+      const folderName = msg.chatType === 'p2p'
+        ? `private-${chatId.slice(-8)}`
+        : `group-${chatId.slice(-8)}`;
+      
+      // 创建新的群组配置（使用独立的 folder）
+      const newGroup: RegisteredGroup = {
         ...mainGroup,
         name: chatName,
+        folder: folderName,
         added_at: new Date().toISOString()
-      });
+      };
+      
+      // 动态注册此会话
+      registerGroup(chatId, newGroup);
+      
+      // 使用新创建的群组（而不是 mainGroup）
+      group = newGroup;
       
       logger.info({ 
         chatId, 
         chatType: msg.chatType,
-        name: chatName 
+        name: chatName,
+        folder: folderName
       }, '⚡ 会话已自动注册');
     }
   }
@@ -466,6 +485,7 @@ async function handleIncomingMessage(msg: Message): Promise<void> {
 // ==================== Agent 执行 ====================
 interface ExecuteAgentOptions {
   attachments?: { type: 'image'; content: string; mimeType?: string }[];
+  userId?: string;  // 用户 ID，用于用户级别记忆
 }
 
 async function executeAgent(group: RegisteredGroup, prompt: string, chatId: string, options?: ExecuteAgentOptions): Promise<string | null> {
@@ -495,6 +515,7 @@ async function executeAgent(group: RegisteredGroup, prompt: string, chatId: stri
       groupFolder: group.folder,
       chatJid: chatId,
       isMain,
+      userId: options?.userId || chatId,  // 用户级别记忆
       attachments: options?.attachments
     });
 
@@ -793,13 +814,17 @@ function displayBanner(enabledPlatforms: string[], groupCount: number): void {
 
 // ==================== 主函数 ====================
 export async function main(): Promise<void> {
-  // 初始化 API 客户端
-  apiClient = createApiClient();
+  // 初始化 API 客户端（全局单例）
+  apiClient = getApiClient();
   
-  // 初始化记忆管理器
-  memoryManager = new MemoryManager();
+  // 初始化记忆管理器（使用全局单例）
+  memoryManager = getMemoryManager();
   
-  // 加载插件
+  // 初始化数据库（必须在加载插件之前，因为插件可能依赖数据库）
+  initDatabase();
+  logger.info('⚡ 数据库已初始化');
+  
+  // 加载插件（在数据库初始化之后）
   const pluginsDir = path.join(process.cwd(), 'plugins');
   await loadFromDir(pluginsDir);
   
@@ -842,10 +867,6 @@ export async function main(): Promise<void> {
   const enabledPlatforms = channelManager.getEnabledPlatforms();
   logger.info({ platforms: enabledPlatforms }, '⚡ 渠道管理器已初始化');
 
-  // 初始化数据库
-  initDatabase();
-  logger.info('⚡ 数据库已初始化');
-
   // 加载状态
   loadState();
 
@@ -881,6 +902,70 @@ export async function main(): Promise<void> {
     platforms: enabledPlatforms,
     groups: groupCount
   }, '⚡ FlashClaw 已启动');
+
+  // 注册优雅关闭处理
+  setupGracefulShutdown();
+}
+
+// ==================== 优雅关闭 ====================
+
+let isShuttingDown = false;
+
+/**
+ * 设置优雅关闭处理
+ */
+function setupGracefulShutdown(): void {
+  const shutdown = async (signal: string) => {
+    if (isShuttingDown) {
+      logger.warn('正在关闭中，请稍候...');
+      return;
+    }
+    isShuttingDown = true;
+    
+    logger.info({ signal }, '⚡ 收到关闭信号，正在优雅关闭...');
+    
+    try {
+      // 1. 停止接收新消息（停止渠道插件）
+      logger.debug('停止渠道插件...');
+      await pluginManager.stopAll();
+      
+      // 2. 停止消息队列（等待当前任务完成）
+      logger.debug('停止消息队列...');
+      messageQueue?.stop();
+      
+      // 3. 停止任务调度器
+      logger.debug('停止任务调度器...');
+      stopScheduler();
+      
+      // 4. 停止插件目录监听
+      logger.debug('停止插件监听...');
+      stopWatching();
+      
+      // 5. 保存状态
+      logger.debug('保存状态...');
+      saveState();
+      
+      logger.info('⚡ FlashClaw 已安全关闭');
+      process.exit(0);
+    } catch (err) {
+      logger.error({ err }, '关闭过程中发生错误');
+      process.exit(1);
+    }
+  };
+  
+  // 监听关闭信号
+  process.on('SIGINT', () => shutdown('SIGINT'));   // Ctrl+C
+  process.on('SIGTERM', () => shutdown('SIGTERM')); // kill
+  
+  // 未捕获异常处理
+  process.on('uncaughtException', (err) => {
+    logger.error({ err }, '未捕获异常');
+    shutdown('uncaughtException');
+  });
+  
+  process.on('unhandledRejection', (reason) => {
+    logger.error({ reason }, '未处理的 Promise 拒绝');
+  });
 }
 
 // 直接运行时启动

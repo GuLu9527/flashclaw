@@ -1,0 +1,8 @@
+{
+  "name": "resume_task",
+  "version": "1.0.0",
+  "description": "恢复已暂停的定时任务",
+  "type": "tool",
+  "main": "index.ts",
+  "dependencies": []
+}

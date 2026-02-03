@@ -96,6 +96,9 @@ export class MemoryManager {
   /** 长期记忆缓存：groupId -> 记忆条目映射 */
   private longTermCache: Map<string, Map<string, MemoryEntry>> = new Map();
   
+  /** 用户级别记忆缓存：userId -> 记忆条目映射 */
+  private userMemoryCache: Map<string, Map<string, MemoryEntry>> = new Map();
+  
   /** 压缩摘要缓存：groupId -> 摘要 */
   private summaryCache: Map<string, string> = new Map();
   
@@ -279,6 +282,152 @@ export class MemoryManager {
     }
     
     return Array.from(this.longTermCache.get(groupId)!.keys());
+  }
+  
+  // ==================== 用户级别记忆 ====================
+  
+  /**
+   * 记住用户级别信息（跨会话共享）
+   * 
+   * @param userId - 用户 ID
+   * @param key - 记忆键
+   * @param value - 记忆值
+   */
+  rememberUser(userId: string, key: string, value: string): void {
+    if (!this.userMemoryCache.has(userId)) {
+      this.loadUserMemory(userId);
+    }
+    
+    const cache = this.userMemoryCache.get(userId)!;
+    const now = new Date().toISOString();
+    
+    const existing = cache.get(key);
+    const entry: MemoryEntry = {
+      key,
+      value,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    };
+    
+    cache.set(key, entry);
+    this.saveUserMemory(userId);
+  }
+  
+  /**
+   * 回忆用户级别信息
+   * 
+   * @param userId - 用户 ID
+   * @param key - 记忆键（可选，不提供则返回所有记忆）
+   * @returns 记忆值或格式化的所有记忆
+   */
+  recallUser(userId: string, key?: string): string {
+    if (!this.userMemoryCache.has(userId)) {
+      this.loadUserMemory(userId);
+    }
+    
+    const cache = this.userMemoryCache.get(userId)!;
+    
+    if (key) {
+      return cache.get(key)?.value ?? '';
+    }
+    
+    if (cache.size === 0) {
+      return '';
+    }
+    
+    const lines: string[] = [];
+    for (const [k, entry] of cache) {
+      lines.push(`- ${k}: ${entry.value}`);
+    }
+    return lines.join('\n');
+  }
+  
+  /**
+   * 删除用户级别记忆
+   */
+  forgetUser(userId: string, key: string): void {
+    if (!this.userMemoryCache.has(userId)) {
+      this.loadUserMemory(userId);
+    }
+    
+    const cache = this.userMemoryCache.get(userId)!;
+    if (cache.delete(key)) {
+      this.saveUserMemory(userId);
+    }
+  }
+  
+  /**
+   * 获取用户文件路径
+   */
+  private getUserMemoryFilePath(userId: string): string {
+    const safeId = userId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    return path.join(this.config.memoryDir, 'users', `${safeId}.md`);
+  }
+  
+  /**
+   * 加载用户级别记忆
+   */
+  private loadUserMemory(userId: string): void {
+    const cache = new Map<string, MemoryEntry>();
+    this.userMemoryCache.set(userId, cache);
+    
+    const filePath = this.getUserMemoryFilePath(userId);
+    if (!fs.existsSync(filePath)) {
+      return;
+    }
+    
+    try {
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const entries = this.parseMemoryFile(content);
+      for (const entry of entries) {
+        cache.set(entry.key, entry);
+      }
+    } catch (error) {
+      logger.error({ path: filePath, error }, '加载用户记忆文件失败');
+    }
+  }
+  
+  /**
+   * 保存用户级别记忆
+   */
+  private saveUserMemory(userId: string): void {
+    const cache = this.userMemoryCache.get(userId);
+    if (!cache) return;
+    
+    const filePath = this.getUserMemoryFilePath(userId);
+    
+    // 确保目录存在
+    const dir = path.dirname(filePath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    
+    const content = this.formatMemoryFile(`用户 ${userId}`, cache);
+    
+    try {
+      fs.writeFileSync(filePath, content, 'utf-8');
+    } catch (error) {
+      logger.error({ path: filePath, error }, '保存用户记忆文件失败');
+    }
+  }
+  
+  /**
+   * 构建包含用户记忆的系统提示词
+   */
+  buildUserSystemPrompt(userId: string, basePrompt?: string): string {
+    const parts: string[] = [];
+    
+    if (basePrompt) {
+      parts.push(basePrompt);
+    }
+    
+    // 添加用户级别记忆
+    const userMemories = this.recallUser(userId);
+    if (userMemories) {
+      parts.push(`\n## 关于这个用户的记忆（跨会话共享）\n${userMemories}`);
+    }
+    
+    return parts.join('\n\n');
   }
   
   // ==================== 上下文压缩 ====================
@@ -664,13 +813,38 @@ ${conversationText}
 
 // ==================== 工厂函数 ====================
 
+// 使用全局变量存储单例，确保 jiti 动态加载的模块也能访问同一个实例
+declare global {
+  // eslint-disable-next-line no-var
+  var __flashclaw_memory_manager: MemoryManager | undefined;
+}
+
+/**
+ * 获取全局记忆管理器实例
+ * 确保所有模块（包括 jiti 加载的插件）使用同一个实例
+ */
+export function getMemoryManager(): MemoryManager {
+  if (!global.__flashclaw_memory_manager) {
+    global.__flashclaw_memory_manager = new MemoryManager({
+      memoryDir: 'data/memory',
+    });
+  }
+  return global.__flashclaw_memory_manager;
+}
+
 /**
  * 创建默认记忆管理器
  * 
  * @param baseDir - 基础目录（可选）
  * @returns 记忆管理器实例
+ * @deprecated 使用 getMemoryManager() 获取全局单例
  */
 export function createMemoryManager(baseDir?: string): MemoryManager {
+  // 如果已有全局实例，返回它
+  if (global.__flashclaw_memory_manager) {
+    return global.__flashclaw_memory_manager;
+  }
+  // 否则创建新实例
   return new MemoryManager({
     memoryDir: baseDir ? path.join(baseDir, 'memory') : 'data/memory',
   });

@@ -16,7 +16,9 @@
     "start": "node dist/cli.js start",
     "dev": "tsx src/index.ts",
     "cli": "tsx src/cli.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build",
+    "postinstall": "node -e \"const fs=require('fs');['data','groups','groups/global','groups/main'].forEach(d=>fs.mkdirSync(d,{recursive:true}))\" 2>/dev/null || true"
   },
   "keywords": [
     "ai",

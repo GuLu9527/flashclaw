@@ -5,6 +5,13 @@
   "description": "钉钉通讯渠道插件",
   "author": "FlashClaw",
   "main": "index.ts",
+  "dependencies": [
+    "send-message",
+    "schedule-task",
+    "list-tasks",
+    "cancel-task",
+    "memory"
+  ],
   "config": {
     "appKey": {
       "type": "string",

@@ -86,7 +86,11 @@ flashclaw/
 │   ├── send-message/         # 发送消息工具
 │   ├── schedule-task/        # 创建定时任务
 │   ├── list-tasks/           # 列出定时任务
-│   └── cancel-task/          # 取消定时任务
+│   ├── cancel-task/          # 取消定时任务
+│   ├── pause-task/           # 暂停定时任务
+│   ├── resume-task/          # 恢复定时任务
+│   ├── memory/               # 长期记忆
+│   └── register-group/       # 注册群组
 │
 ├── docs/                      # 文档
 ├── groups/                    # 群组记忆（模板）
@@ -306,27 +310,35 @@ refactor: 重构消息队列实现
 
    ```typescript
    // plugins/my-tool/index.ts
-   import { ToolPlugin } from '../../src/plugins/types.js';
+   import { ToolPlugin, ToolResult } from '../../src/plugins/types.js';
 
    const plugin: ToolPlugin = {
      name: 'my_tool',
+     version: '1.0.0',
      description: '我的工具描述',
      
      schema: {
-       type: 'object',
-       properties: {
-         param1: {
-           type: 'string',
-           description: '参数1'
-         }
-       },
-       required: ['param1']
+       name: 'my_tool',
+       description: '工具功能描述（AI 可见）',
+       input_schema: {
+         type: 'object',
+         properties: {
+           param1: {
+             type: 'string',
+             description: '参数1'
+           }
+         },
+         required: ['param1']
+       }
      },
      
-     async execute(params, context) {
-       const { param1 } = params;
+     async execute(params, context): Promise<ToolResult> {
+       const { param1 } = params as { param1: string };
        // 执行逻辑...
-       return '执行结果';
+       return {
+         success: true,
+         data: '执行结果'
+       };
      }
    };
 

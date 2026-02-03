@@ -499,3 +499,31 @@ export function createApiClient(): ApiClient | null {
     timeout: process.env.API_TIMEOUT ? parseInt(process.env.API_TIMEOUT) : undefined,
   });
 }
+
+// ==================== 全局单例 ====================
+
+// 声明全局类型
+declare global {
+  // eslint-disable-next-line no-var
+  var __flashclaw_api_client: ApiClient | null | undefined;
+}
+
+/**
+ * 获取全局 API 客户端单例
+ * 确保 jiti 热加载的插件访问同一实例
+ * 
+ * @returns API 客户端实例，如果配置缺失则返回 null
+ */
+export function getApiClient(): ApiClient | null {
+  if (global.__flashclaw_api_client === undefined) {
+    global.__flashclaw_api_client = createApiClient();
+  }
+  return global.__flashclaw_api_client;
+}
+
+/**
+ * 重置 API 客户端（用于配置变更后重新初始化）
+ */
+export function resetApiClient(): void {
+  global.__flashclaw_api_client = undefined;
+}

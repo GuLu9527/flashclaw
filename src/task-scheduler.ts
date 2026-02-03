@@ -70,11 +70,25 @@ interface TaskRunResult {
 
 // ==================== 调度器状态 ====================
 
-const state: SchedulerState = {
-  timer: null,
-  running: false,
-  deps: null
-};
+// 使用全局变量存储调度器状态，确保 jiti 动态加载的插件也能访问同一个实例
+declare global {
+  // eslint-disable-next-line no-var
+  var __flashclaw_scheduler_state: SchedulerState | undefined;
+}
+
+function getState(): SchedulerState {
+  if (!global.__flashclaw_scheduler_state) {
+    global.__flashclaw_scheduler_state = {
+      timer: null,
+      running: false,
+      deps: null
+    };
+  }
+  return global.__flashclaw_scheduler_state;
+}
+
+// 注意：所有对 state 的访问都应该使用 getState() 函数，
+// 以确保 jiti 动态加载的模块也能访问到正确的状态
 
 // 并发限制器
 const taskLimit = pLimit(MAX_CONCURRENT_TASKS);
@@ -87,6 +101,7 @@ const taskLimit = pLimit(MAX_CONCURRENT_TASKS);
  */
 function armTimer(): void {
   // 清除旧定时器
+  const state = getState();
   if (state.timer) {
     clearTimeout(state.timer);
     state.timer = null;
@@ -111,30 +126,31 @@ function armTimer(): void {
     delayMs: clampedDelay 
   }, '设置定时器');
 
-  state.timer = setTimeout(() => {
+  const currentState = getState();
+  currentState.timer = setTimeout(() => {
     void onTimer().catch((err) => {
       logger.error({ err: String(err) }, '定时器触发失败');
     });
   }, clampedDelay);
 
   // 允许进程在没有其他活动时退出
-  state.timer.unref?.();
+  currentState.timer.unref?.();
 }
 
 /**
  * 定时器触发时的处理函数
  */
 async function onTimer(): Promise<void> {
-  if (state.running) {
+  if (getState().running) {
     logger.debug('调度器正在运行，跳过本次触发');
     return;
   }
 
-  state.running = true;
+  getState().running = true;
   try {
     await runDueTasks();
   } finally {
-    state.running = false;
+    getState().running = false;
     armTimer();
   }
 }
@@ -143,7 +159,7 @@ async function onTimer(): Promise<void> {
  * 执行所有到期任务
  */
 async function runDueTasks(): Promise<void> {
-  if (!state.deps) {
+  if (!getState().deps) {
     logger.error('调度器依赖未初始化');
     return;
   }
@@ -179,7 +195,7 @@ async function runDueTasks(): Promise<void> {
  */
 async function executeTask(task: ScheduledTask): Promise<void> {
   const startTime = Date.now();
-  const deps = state.deps!;
+  const deps = getState().deps!;
 
   logger.info({ taskId: task.id, group: task.group_folder }, '⚡ 开始执行任务');
 
@@ -373,7 +389,7 @@ function calculateNextRun(task: ScheduledTask): string | null {
  * 启动调度器
  */
 export function startScheduler(deps: SchedulerDependencies): void {
-  state.deps = deps;
+  getState().deps = deps;
   logger.info('⚡ 任务调度器已启动');
   armTimer();
 }
@@ -382,6 +398,7 @@ export function startScheduler(deps: SchedulerDependencies): void {
  * 停止调度器
  */
 export function stopScheduler(): void {
+  const state = getState();
   if (state.timer) {
     clearTimeout(state.timer);
     state.timer = null;
@@ -411,7 +428,7 @@ export function getSchedulerStatus(): {
   const dueTasks = getDueTasks();
   
   return {
-    running: state.running,
+    running: getState().running,
     nextWakeTime,
     activeTasks: dueTasks.length
   };

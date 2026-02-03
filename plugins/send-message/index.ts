@@ -11,28 +11,22 @@ import { ToolPlugin, ToolContext, ToolResult } from '../../src/plugins/types.js'
 interface SendMessageParams {
   /** 要发送的消息内容 */
   content: string;
-  /** 目标聊天 ID（可选，默认当前聊天） */
-  chatId?: string;
 }
 
 const plugin: ToolPlugin = {
   name: 'send_message',
   version: '1.0.0',
-  description: '发送消息到当前聊天或指定聊天',
+  description: '发送消息到当前聊天',
   
   schema: {
     name: 'send_message',
-    description: '发送消息到聊天。用于主动通知用户、回复消息或发送执行结果。',
+    description: '发送消息到当前聊天。用于主动通知用户、回复消息或发送执行结果。',
     input_schema: {
       type: 'object',
       properties: {
         content: {
           type: 'string',
           description: '要发送的消息内容，支持文本格式'
-        },
-        chatId: {
-          type: 'string',
-          description: '目标聊天 ID。如果不指定，则发送到当前对话的聊天'
         }
       },
       required: ['content']
@@ -40,7 +34,7 @@ const plugin: ToolPlugin = {
   },
   
   async execute(params: unknown, context: ToolContext): Promise<ToolResult> {
-    const { content, chatId } = params as SendMessageParams;
+    const { content } = params as SendMessageParams;
     
     // 验证参数
     if (!content || typeof content !== 'string') {
@@ -57,16 +51,14 @@ const plugin: ToolPlugin = {
       };
     }
     
-    const targetChatId = chatId || context.chatId;
-    
     try {
-      // 使用上下文提供的 sendMessage 方法发送消息
+      // 使用上下文提供的 sendMessage 方法发送消息到当前聊天
       await context.sendMessage(content);
       
       return {
         success: true,
         data: {
-          chatId: targetChatId,
+          chatId: context.chatId,
           contentLength: content.length,
           sent: true
         }

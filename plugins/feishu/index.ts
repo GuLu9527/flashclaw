@@ -308,9 +308,9 @@ class FeishuChannelPlugin implements ChannelPlugin {
   async updateMessage(messageId: string, content: string): Promise<void> {
     if (!this.client) throw new Error('飞书插件未初始化');
 
+    // 飞书只支持更新卡片消息，普通文本消息会失败
+    // 抛出错误让主程序执行降级逻辑（删除并重发）
     try {
-      // 飞书只支持更新卡片消息，普通文本消息会失败
-      // 这里尝试更新，失败则忽略
       await this.client.im.message.patch({
         path: { message_id: messageId },
         data: {
@@ -319,8 +319,9 @@ class FeishuChannelPlugin implements ChannelPlugin {
       });
       logger.debug({ messageId, plugin: this.name }, '消息已更新');
     } catch (err: any) {
-      // 飞书不支持更新普通文本消息，静默忽略
-      logger.debug({ messageId, err: err?.message, plugin: this.name }, '消息更新失败（可能是普通文本消息）');
+      // 普通文本消息无法更新，抛出错误触发降级
+      logger.debug({ messageId, plugin: this.name }, '消息更新失败，将触发降级发送');
+      throw new Error('飞书不支持更新普通文本消息');
     }
   }
 
@@ -900,6 +901,14 @@ class FeishuChannelPlugin implements ChannelPlugin {
       const mentions = msg.mentions || [];
       const hasAttachment = (msg.attachments?.length || 0) > 0;
 
+      logger.debug({ 
+        chatId, 
+        mentions, 
+        content: msg.content.slice(0, 50),
+        hasAttachment,
+        plugin: this.name 
+      }, '>>> 群聊响应检查');
+
       // 纯附件消息需要 @ 才响应
       if (hasAttachment && mentions.length === 0 && (!msg.content || msg.content === '[图片]' || msg.content === '[附件]')) {
         logger.debug({ chatId, plugin: this.name }, '群聊附件消息未 @，忽略');
@@ -908,7 +917,7 @@ class FeishuChannelPlugin implements ChannelPlugin {
 
       // 纯文本消息应用智能响应规则
       if (!hasAttachment && !shouldRespondInGroup(msg.content, mentions)) {
-        logger.debug({ chatId, plugin: this.name }, '群聊消息不满足响应条件，忽略');
+        logger.debug({ chatId, mentions, content: msg.content, plugin: this.name }, '群聊消息不满足响应条件，忽略');
         return;
       }
     }

@@ -41,7 +41,11 @@ flashclaw/
 │   ├── send-message/     # 发送消息工具
 │   ├── schedule-task/    # 创建定时任务
 │   ├── list-tasks/       # 列出定时任务
-│   └── cancel-task/      # 取消定时任务
+│   ├── cancel-task/      # 取消定时任务
+│   ├── pause-task/       # 暂停定时任务
+│   ├── resume-task/      # 恢复定时任务
+│   ├── memory/           # 长期记忆
+│   └── register-group/   # 注册群组
 │
 ├── groups/                # 群组记忆
 ├── data/                  # 运行时数据
@@ -88,38 +92,46 @@ flashclaw/
 
 ```typescript
 // plugins/my-tool/index.ts
-import { ToolPlugin, ToolContext } from '../../src/plugins/types.js';
+import { ToolPlugin, ToolContext, ToolResult } from '../../src/plugins/types.js';
 
 const plugin: ToolPlugin = {
   name: 'my_tool',
+  version: '1.0.0',
   description: '我的工具描述',
   
   // Anthropic tool_use 格式的参数定义
   schema: {
-    type: 'object',
-    properties: {
-      param1: {
-        type: 'string',
-        description: '参数1描述'
+    name: 'my_tool',
+    description: '工具功能描述（AI 可见）',
+    input_schema: {
+      type: 'object',
+      properties: {
+        param1: {
+          type: 'string',
+          description: '参数1描述'
+        },
+        param2: {
+          type: 'number',
+          description: '参数2描述'
+        }
       },
-      param2: {
-        type: 'number',
-        description: '参数2描述'
-      }
-    },
-    required: ['param1']
+      required: ['param1']
+    }
   },
   
   // 工具执行逻辑
-  async execute(params: Record<string, unknown>, context: ToolContext): Promise<string> {
-    const { param1, param2 } = params;
+  async execute(params: unknown, context: ToolContext): Promise<ToolResult> {
+    const { param1, param2 } = params as { param1: string; param2?: number };
     
     // 访问上下文
-    const { chatId, groupFolder, isMain } = context;
+    const { chatId, groupId } = context;
     
     // 执行逻辑...
     
-    return '执行结果';
+    return {
+      success: true,
+      data: '执行结果'
+    };
   }
 };
 
@@ -131,9 +143,8 @@ export default plugin;
 ```typescript
 interface ToolContext {
   chatId: string;        // 当前聊天 ID
-  groupFolder: string;   // 群组文件夹名
-  isMain: boolean;       // 是否主群组（有额外权限）
-  sendMessage: (chatId: string, text: string) => Promise<void>;
+  groupId: string;       // 群组文件夹名（同 groupFolder）
+  sendMessage: (content: string) => Promise<void>;  // 发送消息到当前聊天
 }
 ```
 

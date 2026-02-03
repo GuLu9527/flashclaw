@@ -173,7 +173,7 @@ FlashClaw 自动检测 AI 模型的能力：
 
 - 内置调度器运行定时任务
 - 工具插件提供调度能力
-- 工具：`schedule_task`、`list_tasks`、`cancel_task`、`send_message`
+- 工具：`schedule_task`、`list_tasks`、`cancel_task`、`pause_task`、`resume_task`、`send_message`
 - 任务存储在 SQLite，包含运行历史
 - 调度器循环每分钟检查到期任务
 

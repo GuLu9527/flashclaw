@@ -12,6 +12,7 @@ export interface PluginConfig {
 export interface ToolContext {
   chatId: string;
   groupId: string;
+  userId: string;  // 用户 ID，用于用户级别记忆
   sendMessage: (content: string) => Promise<void>;
 }
 

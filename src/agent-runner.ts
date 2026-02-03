@@ -12,16 +12,16 @@
 import fs from 'fs';
 import path from 'path';
 import pino from 'pino';
-import { CronExpressionParser } from 'cron-parser';
 import {
   GROUPS_DIR,
   DATA_DIR,
-  AGENT_TIMEOUT
+  AGENT_TIMEOUT,
+  TIMEZONE
 } from './config.js';
 import { RegisteredGroup } from './types.js';
-import { ApiClient, ChatMessage, ToolSchema, createApiClient, TextBlock, ImageBlock } from './core/api-client.js';
+import { ApiClient, ChatMessage, ToolSchema, getApiClient, TextBlock, ImageBlock } from './core/api-client.js';
 import { currentModelSupportsVision, getCurrentModelId } from './core/model-capabilities.js';
-import { MemoryManager, createMemoryManager } from './core/memory.js';
+import { MemoryManager, getMemoryManager as getGlobalMemoryManager } from './core/memory.js';
 import { pluginManager } from './plugins/manager.js';
 import { ToolContext, ToolResult as PluginToolResult } from './plugins/types.js';
 
@@ -47,6 +47,8 @@ export interface AgentInput {
   chatJid: string;
   isMain: boolean;
   isScheduledTask?: boolean;
+  /** 用户 ID，用于用户级别记忆 */
+  userId?: string;
   /** 图片附件列表 */
   attachments?: ImageAttachment[];
 }
@@ -67,6 +69,7 @@ interface IpcContext {
   chatJid: string;
   groupFolder: string;
   isMain: boolean;
+  userId: string;
 }
 
 /**
@@ -102,214 +105,27 @@ function writeIpcFile(dir: string, data: object): string {
 }
 
 /**
- * 获取所有可用工具（插件工具 + 内置后备工具）
- * 插件工具优先，内置工具作为后备
+ * 获取所有可用工具（完全依赖插件）
  */
 export function getAllTools(): ToolSchema[] {
-  // 获取插件工具
-  const pluginTools = pluginManager.getActiveTools();
-  const pluginToolNames = new Set(pluginTools.map(t => t.name));
-  
-  // 获取内置工具（作为后备）
-  const builtinTools = getBuiltinTools();
-  
-  // 合并：插件工具 + 不在插件中的内置工具
-  const combinedTools = [...pluginTools];
-  for (const tool of builtinTools) {
-    if (!pluginToolNames.has(tool.name)) {
-      combinedTools.push(tool);
-    }
-  }
-  
-  return combinedTools;
+  return pluginManager.getActiveTools();
 }
 
-/**
- * 内置工具定义（后备，优先使用插件）
- * 这些工具用于消息发送和任务调度
- */
-export function getBuiltinTools(): ToolSchema[] {
-  return [
-    {
-      name: 'send_message',
-      description: 'Send a message to the current chat. Use this to proactively share information or updates.',
-      input_schema: {
-        type: 'object',
-        properties: {
-          text: {
-            type: 'string',
-            description: 'The message text to send'
-          }
-        },
-        required: ['text']
-      }
-    },
-    {
-      name: 'schedule_task',
-      description: `Schedule a recurring or one-time task. The task will run as a full agent with access to all tools.
-
-CONTEXT MODE - Choose based on task type:
-• "group" (recommended for most tasks): Task runs in the group's conversation context, with access to chat history and memory.
-• "isolated": Task runs in a fresh session with no conversation history.
-
-SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
-• cron: Standard cron expression (e.g., "0 9 * * *" for daily at 9am)
-• interval: Milliseconds between runs (e.g., "300000" for 5 minutes)
-• once: Local time like "2026-02-01T15:30:00" (no Z suffix!)`,
-      input_schema: {
-        type: 'object',
-        properties: {
-          prompt: {
-            type: 'string',
-            description: 'What the agent should do when the task runs'
-          },
-          schedule_type: {
-            type: 'string',
-            enum: ['cron', 'interval', 'once'],
-            description: 'cron=recurring at specific times, interval=recurring every N ms, once=run once'
-          },
-          schedule_value: {
-            type: 'string',
-            description: 'The schedule value based on schedule_type'
-          },
-          context_mode: {
-            type: 'string',
-            enum: ['group', 'isolated'],
-            description: 'group=runs with chat history, isolated=fresh session'
-          },
-          target_group: {
-            type: 'string',
-            description: 'Target group folder (main only, defaults to current group)'
-          }
-        },
-        required: ['prompt', 'schedule_type', 'schedule_value']
-      }
-    },
-    {
-      name: 'list_tasks',
-      description: "List all scheduled tasks. From main: shows all tasks. From other groups: shows only that group's tasks.",
-      input_schema: {
-        type: 'object',
-        properties: {}
-      }
-    },
-    {
-      name: 'pause_task',
-      description: 'Pause a scheduled task. It will not run until resumed.',
-      input_schema: {
-        type: 'object',
-        properties: {
-          task_id: {
-            type: 'string',
-            description: 'The task ID to pause'
-          }
-        },
-        required: ['task_id']
-      }
-    },
-    {
-      name: 'resume_task',
-      description: 'Resume a paused task.',
-      input_schema: {
-        type: 'object',
-        properties: {
-          task_id: {
-            type: 'string',
-            description: 'The task ID to resume'
-          }
-        },
-        required: ['task_id']
-      }
-    },
-    {
-      name: 'cancel_task',
-      description: 'Cancel and delete a scheduled task.',
-      input_schema: {
-        type: 'object',
-        properties: {
-          task_id: {
-            type: 'string',
-            description: 'The task ID to cancel'
-          }
-        },
-        required: ['task_id']
-      }
-    },
-    {
-      name: 'register_group',
-      description: `Register a new chat group so the agent can respond to messages there. Main group only.
-The folder name should be lowercase with hyphens (e.g., "family-chat").`,
-      input_schema: {
-        type: 'object',
-        properties: {
-          jid: {
-            type: 'string',
-            description: 'The chat ID (e.g., "oc_xxxxxxxx")'
-          },
-          name: {
-            type: 'string',
-            description: 'Display name for the group'
-          },
-          folder: {
-            type: 'string',
-            description: 'Folder name for group files'
-          },
-          trigger: {
-            type: 'string',
-            description: 'Trigger word (e.g., "@Andy")'
-          }
-        },
-        required: ['jid', 'name', 'folder', 'trigger']
-      }
-    },
-    {
-      name: 'remember',
-      description: 'Save important information to long-term memory. Use this to remember user preferences, important facts, or anything that should persist across conversations.',
-      input_schema: {
-        type: 'object',
-        properties: {
-          key: {
-            type: 'string',
-            description: 'A short key to identify this memory (e.g., "user_name", "preferred_language")'
-          },
-          value: {
-            type: 'string',
-            description: 'The information to remember'
-          }
-        },
-        required: ['key', 'value']
-      }
-    },
-    {
-      name: 'recall',
-      description: 'Retrieve information from long-term memory. Use this to recall previously saved information.',
-      input_schema: {
-        type: 'object',
-        properties: {
-          key: {
-            type: 'string',
-            description: 'The key of the memory to recall. Leave empty to get all memories.'
-          }
-        }
-      }
-    }
-  ];
-}
 
 /**
  * 创建工具执行器
- * 优先使用插件工具，插件不存在则使用内置实现
+ * 完全依赖插件工具
  */
 export function createToolExecutor(ctx: IpcContext, memoryManager: MemoryManager) {
-  const { chatJid, groupFolder, isMain } = ctx;
+  const { chatJid, groupFolder, userId } = ctx;
   const IPC_DIR = getIpcDir(groupFolder);
   const MESSAGES_DIR = path.join(IPC_DIR, 'messages');
-  const TASKS_DIR = path.join(IPC_DIR, 'tasks');
 
   // 构建插件工具上下文
   const pluginContext: ToolContext = {
     chatId: chatJid,
     groupId: groupFolder,
+    userId: userId,
     sendMessage: async (content: string) => {
       // 通过 IPC 发送消息到当前聊天
       const data = {
@@ -324,13 +140,14 @@ export function createToolExecutor(ctx: IpcContext, memoryManager: MemoryManager
   };
 
   return async (name: string, params: unknown): Promise<ToolResult> => {
-    const args = params as Record<string, unknown>;
+    logger.info({ tool: name, params }, '⚡ 执行工具');
 
-    // 优先尝试使用插件工具
+    // 使用插件工具
     const plugin = pluginManager.getTool(name);
     if (plugin) {
       try {
         const result = await plugin.execute(params, pluginContext);
+        logger.info({ tool: name, success: result.success, error: result.error }, '⚡ 插件执行结果');
         if (result.success) {
           return { 
             content: typeof result.data === 'string' 
@@ -349,213 +166,27 @@ export function createToolExecutor(ctx: IpcContext, memoryManager: MemoryManager
       }
     }
 
-    // 内置工具后备实现
-    switch (name) {
-      case 'send_message': {
-        const data = {
-          type: 'message',
-          chatJid,
-          text: args.text as string,
-          groupFolder,
-          timestamp: new Date().toISOString()
-        };
-        const filename = writeIpcFile(MESSAGES_DIR, data);
-        return { content: `Message queued for delivery (${filename})` };
-      }
-
-      case 'schedule_task': {
-        const scheduleType = args.schedule_type as string;
-        const scheduleValue = args.schedule_value as string;
-
-        // 验证 schedule_value
-        if (scheduleType === 'cron') {
-          try {
-            CronExpressionParser.parse(scheduleValue);
-          } catch {
-            return {
-              content: `Invalid cron: "${scheduleValue}". Use format like "0 9 * * *" (daily 9am).`,
-              isError: true
-            };
-          }
-        } else if (scheduleType === 'interval') {
-          const ms = parseInt(scheduleValue, 10);
-          if (isNaN(ms) || ms <= 0) {
-            return {
-              content: `Invalid interval: "${scheduleValue}". Must be positive milliseconds.`,
-              isError: true
-            };
-          }
-        } else if (scheduleType === 'once') {
-          const date = new Date(scheduleValue);
-          if (isNaN(date.getTime())) {
-            return {
-              content: `Invalid timestamp: "${scheduleValue}". Use ISO 8601 format.`,
-              isError: true
-            };
-          }
-        }
-
-        const targetGroup = isMain && args.target_group ? args.target_group as string : groupFolder;
-
-        const data = {
-          type: 'schedule_task',
-          prompt: args.prompt,
-          schedule_type: scheduleType,
-          schedule_value: scheduleValue,
-          context_mode: args.context_mode || 'group',
-          groupFolder: targetGroup,
-          chatJid,
-          createdBy: groupFolder,
-          timestamp: new Date().toISOString()
-        };
-
-        const filename = writeIpcFile(TASKS_DIR, data);
-        return { content: `Task scheduled (${filename}): ${scheduleType} - ${scheduleValue}` };
-      }
-
-      case 'list_tasks': {
-        const tasksFile = path.join(IPC_DIR, 'current_tasks.json');
-
-        try {
-          if (!fs.existsSync(tasksFile)) {
-            return { content: 'No scheduled tasks found.' };
-          }
-
-          const allTasks = JSON.parse(fs.readFileSync(tasksFile, 'utf-8'));
-          const tasks = isMain
-            ? allTasks
-            : allTasks.filter((t: { groupFolder: string }) => t.groupFolder === groupFolder);
-
-          if (tasks.length === 0) {
-            return { content: 'No scheduled tasks found.' };
-          }
-
-          const formatted = tasks.map((t: {
-            id: string;
-            prompt: string;
-            schedule_type: string;
-            schedule_value: string;
-            status: string;
-            next_run: string;
-          }) =>
-            `- [${t.id}] ${t.prompt.slice(0, 50)}... (${t.schedule_type}: ${t.schedule_value}) - ${t.status}, next: ${t.next_run || 'N/A'}`
-          ).join('\n');
-
-          return { content: `Scheduled tasks:\n${formatted}` };
-        } catch (err) {
-          return {
-            content: `Error reading tasks: ${err instanceof Error ? err.message : String(err)}`,
-            isError: true
-          };
-        }
-      }
-
-      case 'pause_task': {
-        const data = {
-          type: 'pause_task',
-          taskId: args.task_id,
-          groupFolder,
-          isMain,
-          timestamp: new Date().toISOString()
-        };
-        writeIpcFile(TASKS_DIR, data);
-        return { content: `Task ${args.task_id} pause requested.` };
-      }
-
-      case 'resume_task': {
-        const data = {
-          type: 'resume_task',
-          taskId: args.task_id,
-          groupFolder,
-          isMain,
-          timestamp: new Date().toISOString()
-        };
-        writeIpcFile(TASKS_DIR, data);
-        return { content: `Task ${args.task_id} resume requested.` };
-      }
-
-      case 'cancel_task': {
-        const data = {
-          type: 'cancel_task',
-          taskId: args.task_id,
-          groupFolder,
-          isMain,
-          timestamp: new Date().toISOString()
-        };
-        writeIpcFile(TASKS_DIR, data);
-        return { content: `Task ${args.task_id} cancellation requested.` };
-      }
-
-      case 'register_group': {
-        if (!isMain) {
-          return {
-            content: 'Only the main group can register new groups.',
-            isError: true
-          };
-        }
-
-        const data = {
-          type: 'register_group',
-          jid: args.jid,
-          name: args.name,
-          folder: args.folder,
-          trigger: args.trigger,
-          timestamp: new Date().toISOString()
-        };
-
-        writeIpcFile(TASKS_DIR, data);
-        return { content: `Group "${args.name}" registered. It will start receiving messages immediately.` };
-      }
-
-      case 'remember': {
-        memoryManager.remember(groupFolder, args.key as string, args.value as string);
-        return { content: `已记住: ${args.key} = ${args.value}` };
-      }
-
-      case 'recall': {
-        const value = memoryManager.recall(groupFolder, args.key as string | undefined);
-        if (!value) {
-          return { content: args.key ? `没有找到关于 "${args.key}" 的记忆。` : '没有保存的记忆。' };
-        }
-        return { content: args.key ? `${args.key}: ${value}` : `保存的记忆:\n${value}` };
-      }
-
-      default:
-        return {
-          content: `Unknown tool: ${name}`,
-          isError: true
-        };
-    }
+    // 插件不存在
+    logger.warn({ tool: name }, '⚠️ 工具插件不存在');
+    return {
+      content: `Unknown tool: ${name}. Please ensure the plugin is installed.`,
+      isError: true
+    };
   };
 }
 
 // ==================== 全局实例 ====================
 
-// 全局记忆管理器实例
-let globalMemoryManager: MemoryManager | null = null;
-
 /**
  * 获取全局记忆管理器
+ * 使用 memory.ts 中的全局单例
  */
 export function getMemoryManager(): MemoryManager {
-  if (!globalMemoryManager) {
-    globalMemoryManager = createMemoryManager(DATA_DIR);
-  }
-  return globalMemoryManager;
+  return getGlobalMemoryManager();
 }
 
-// 全局 API 客户端实例
-let globalApiClient: ApiClient | null = null;
-
-/**
- * 获取全局 API 客户端
- */
-export function getApiClient(): ApiClient | null {
-  if (!globalApiClient) {
-    globalApiClient = createApiClient();
-  }
-  return globalApiClient;
-}
+// 注意：API 客户端使用 core/api-client.ts 中的全局单例
+// 通过 getApiClient() 获取，确保 jiti 热加载的插件访问同一实例
 
 // ==================== Retry Configuration ====================
 
@@ -603,31 +234,72 @@ async function sleep(ms: number): Promise<void> {
 // ==================== Agent Execution ====================
 
 /**
+ * 动态生成可用工具列表
+ */
+function getAvailableToolsList(): string {
+  const tools = getAllTools();
+  if (tools.length === 0) {
+    return '暂无可用工具';
+  }
+  
+  return tools.map(tool => {
+    const desc = tool.description || '无描述';
+    return `- ${tool.name}: ${desc}`;
+  }).join('\n');
+}
+
+/**
  * 获取群组的系统提示词
  */
 function getGroupSystemPrompt(group: RegisteredGroup, isMain: boolean, isScheduledTask?: boolean): string {
   const memoryManager = getMemoryManager();
+  
+  // 获取当前时间（用于定时任务等需要时间计算的场景）
+  const now = new Date();
+  const currentTimeISO = now.toISOString();
+  const currentTimeLocal = now.toLocaleString('zh-CN', { timeZone: TIMEZONE });
+  
+  // 动态获取可用工具列表
+  const toolsList = getAvailableToolsList();
   
   // 读取群组的 CLAUDE.md 文件（如果存在）
   const groupDir = path.join(GROUPS_DIR, group.folder);
   const claudeMdPath = path.join(groupDir, 'CLAUDE.md');
   let basePrompt = '';
   
+  // 预计算时间示例，帮助 AI 正确理解 ISO 时间
+  const in10Seconds = new Date(now.getTime() + 10000).toISOString();
+  const in30Seconds = new Date(now.getTime() + 30000).toISOString();
+  const in1Minute = new Date(now.getTime() + 60000).toISOString();
+  const in5Minutes = new Date(now.getTime() + 300000).toISOString();
+  
   if (fs.existsSync(claudeMdPath)) {
+    // 用户自定义提示词，追加时间和工具信息
     basePrompt = fs.readFileSync(claudeMdPath, 'utf-8');
+    basePrompt += `\n\n---\n当前时间: ${currentTimeLocal}\n当前 ISO 时间: ${currentTimeISO}\n时区: ${TIMEZONE}`;
   } else {
     // 默认系统提示词
     basePrompt = `你是 FlashClaw，一个智能助手。
     
 你正在 "${group.name}" 群组中与用户交流。
 
-你可以使用以下工具：
-- send_message: 发送消息到当前聊天
-- schedule_task: 安排定时任务
-- list_tasks: 列出所有定时任务
-- pause_task/resume_task/cancel_task: 管理定时任务
-- remember: 记住重要信息（长期记忆）
-- recall: 回忆之前保存的信息
+## 当前时间
+- 本地时间: ${currentTimeLocal}
+- ISO 时间: ${currentTimeISO}
+- 时区: ${TIMEZONE}
+
+## 可用工具
+${toolsList}
+
+## schedule_task 时间计算（重要！）
+创建一次性任务时，scheduleValue 必须使用 ISO 8601 格式。
+**请直接使用下面预计算好的 ISO 时间，不要自己转换：**
+- 10秒后 = ${in10Seconds}
+- 30秒后 = ${in30Seconds}
+- 1分钟后 = ${in1Minute}
+- 5分钟后 = ${in5Minutes}
+
+对于其他时间，按比例估算即可。例如20秒后约在10秒和30秒之间。
 
 请用中文回复，除非用户使用其他语言。
 保持回复简洁、有帮助。`;
@@ -643,7 +315,16 @@ function getGroupSystemPrompt(group: RegisteredGroup, isMain: boolean, isSchedul
   
   // 添加定时任务上下文
   if (isScheduledTask) {
-    systemPrompt += '\n\n[SCHEDULED TASK - 你是自动运行的，不是响应用户消息。如需与用户沟通，请使用 send_message 工具。]';
+    systemPrompt += `
+
+## ⚠️ 这是定时任务执行
+你现在是被定时任务自动触发的，不是在回复用户消息。
+**重要：你的文字回复用户看不到！必须使用 send_message 工具才能向用户发送消息。**
+
+执行步骤：
+1. 根据任务内容（下面的用户消息）准备提醒内容
+2. 调用 send_message 工具发送提醒给用户
+3. 不要只是回复文字，那样用户收不到`;
   }
   
   return systemPrompt;
@@ -740,7 +421,8 @@ async function runAgentOnce(
     {
       chatJid: input.chatJid,
       groupFolder: group.folder,
-      isMain: input.isMain
+      isMain: input.isMain,
+      userId: input.userId || input.chatJid  // 使用 userId，如果没有则使用 chatJid
     },
     memoryManager
   );
@@ -822,93 +504,144 @@ async function runAgentOnce(
 
   // 获取工具定义（插件工具 + 内置后备工具）
   const tools = getAllTools();
+  
+  // 调试：打印可用工具
+  logger.info({ 
+    group: group.name, 
+    toolCount: tools.length,
+    toolNames: tools.map(t => t.name)
+  }, '⚡ 可用工具列表');
 
-  // 创建超时 Promise
-  const timeoutPromise = new Promise<AgentOutput>((resolve) => {
-    setTimeout(() => {
-      logger.error({ group: group.name }, 'Agent timeout');
-      resolve({
-        status: 'error',
-        result: null,
-        error: `Agent timed out after ${timeout}ms`
-      });
-    }, timeout);
-  });
-
-  // 创建 Agent 执行 Promise
-  const agentPromise = (async (): Promise<AgentOutput> => {
-    try {
-      // 调用 API
-      const response = await apiClient.chat(messages, {
-        system: systemPrompt,
-        tools,
-        maxTokens: 4096
-      });
-
-      let result: string;
-
-      // 检查是否有工具调用
-      if (response.stop_reason === 'tool_use') {
-        // 处理工具调用
-        result = await apiClient.handleToolUse(
-          response,
-          messages,
-          async (name, params) => {
-            const toolResult = await toolExecutor(name, params);
-            if (toolResult.isError) {
-              throw new Error(toolResult.content);
-            }
-            return toolResult.content;
-          },
-          { system: systemPrompt, tools, maxTokens: 4096 }
-        );
-      } else {
-        // 直接提取文本响应
-        result = apiClient.extractText(response);
-      }
-
-      // 保存助手回复到记忆
-      memoryManager.addMessage(group.folder, { role: 'assistant', content: result });
-
-      // 检查是否需要压缩上下文
-      if (memoryManager.needsCompaction(group.folder)) {
-        logger.info({ group: group.name }, 'Compacting conversation context');
-        await memoryManager.compact(group.folder, apiClient);
-      }
-
-      const duration = Date.now() - startTime;
-      logger.info({
-        group: group.name,
-        duration,
-        status: 'success',
-        hasResult: !!result
-      }, 'Agent completed');
-
-      return {
-        status: 'success',
-        result
-      };
-
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      const duration = Date.now() - startTime;
-
-      logger.error({
-        group: group.name,
-        duration,
-        error: errorMessage
-      }, 'Agent error');
-
-      return {
-        status: 'error',
-        result: null,
-        error: errorMessage
-      };
+  // 活动超时机制：有数据流动时自动延长超时
+  let activityTimer: NodeJS.Timeout | null = null;
+  let isTimedOut = false;
+  
+  const resetActivityTimeout = () => {
+    if (activityTimer) {
+      clearTimeout(activityTimer);
     }
-  })();
+    activityTimer = setTimeout(() => {
+      isTimedOut = true;
+      logger.error({ group: group.name }, 'Agent timeout (no activity)');
+    }, timeout);
+  };
+  
+  const clearActivityTimeout = () => {
+    if (activityTimer) {
+      clearTimeout(activityTimer);
+      activityTimer = null;
+    }
+  };
 
-  // 竞争：Agent 执行 vs 超时
-  return Promise.race([agentPromise, timeoutPromise]);
+  // 开始计时
+  resetActivityTimeout();
+
+  try {
+    // 使用流式 API 获取响应（避免长时间等待导致超时）
+    let responseText = '';
+    let finalResponse: any = null;
+    
+    logger.info({ group: group.name }, '⚡ 开始流式请求');
+    
+    for await (const event of apiClient.chatStream(messages, {
+      system: systemPrompt,
+      tools,
+      maxTokens: 4096
+    })) {
+      // 每收到数据就重置超时计时器
+      resetActivityTimeout();
+      
+      if (isTimedOut) {
+        throw new Error(`Agent timed out after ${timeout}ms of inactivity`);
+      }
+      
+      if (event.type === 'text') {
+        responseText += event.text;
+      } else if (event.type === 'done') {
+        finalResponse = event.message;
+      }
+    }
+    
+    clearActivityTimeout();
+    
+    if (!finalResponse) {
+      throw new Error('No response received from API');
+    }
+    
+    // 调试：打印 API 响应
+    logger.info({ 
+      group: group.name,
+      stopReason: finalResponse.stop_reason,
+      contentTypes: finalResponse.content.map((c: any) => c.type)
+    }, '⚡ API 响应');
+
+    let result: string;
+
+    // 检查是否有工具调用
+    if (finalResponse.stop_reason === 'tool_use') {
+      // 处理工具调用（使用活动超时）
+      resetActivityTimeout();
+      
+      result = await apiClient.handleToolUse(
+        finalResponse,
+        messages,
+        async (name, params) => {
+          resetActivityTimeout(); // 工具执行时也重置超时
+          const toolResult = await toolExecutor(name, params);
+          if (toolResult.isError) {
+            throw new Error(toolResult.content);
+          }
+          return toolResult.content;
+        },
+        { system: systemPrompt, tools, maxTokens: 4096 }
+      );
+      
+      clearActivityTimeout();
+    } else {
+      // 使用流式收集的文本，或从响应中提取
+      result = responseText || apiClient.extractText(finalResponse);
+    }
+
+    // 保存助手回复到记忆
+    memoryManager.addMessage(group.folder, { role: 'assistant', content: result });
+
+    // 检查是否需要压缩上下文
+    if (memoryManager.needsCompaction(group.folder)) {
+      logger.info({ group: group.name }, 'Compacting conversation context');
+      await memoryManager.compact(group.folder, apiClient);
+    }
+
+    const duration = Date.now() - startTime;
+    logger.info({
+      group: group.name,
+      duration,
+      status: 'success',
+      hasResult: !!result
+    }, 'Agent completed');
+
+    return {
+      status: 'success',
+      result
+    };
+
+  } catch (err) {
+    clearActivityTimeout();
+    
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    const duration = Date.now() - startTime;
+
+    logger.error({
+      group: group.name,
+      duration,
+      error: errorMessage
+    }, 'Agent error');
+
+    return {
+      status: 'error',
+      result: null,
+      error: errorMessage
+    };
+  }
 }
 
 // ==================== Snapshot Functions ====================

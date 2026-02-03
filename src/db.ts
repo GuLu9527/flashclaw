@@ -17,14 +17,30 @@ export interface MessageInput {
   isFromMe: boolean;
 }
 
-let db: Database.Database;
+// 使用全局变量存储数据库实例，确保 jiti 动态加载的插件也能访问
+// 这是因为 jiti 可能创建独立的模块作用域
+declare global {
+  // eslint-disable-next-line no-var
+  var __flashclaw_db: Database.Database | undefined;
+}
+
+/**
+ * 获取数据库实例，确保已初始化
+ */
+function getDb(): Database.Database {
+  if (!global.__flashclaw_db) {
+    throw new Error('数据库未初始化，请先调用 initDatabase()');
+  }
+  return global.__flashclaw_db;
+}
 
 export function initDatabase(): void {
   const dbPath = path.join(STORE_DIR, 'messages.db');
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
-  db = new Database(dbPath);
-  db.exec(`
+  const database = new Database(dbPath);
+  global.__flashclaw_db = database;
+  database.exec(`
     CREATE TABLE IF NOT EXISTS chats (
       jid TEXT PRIMARY KEY,
       name TEXT,
@@ -74,33 +90,33 @@ export function initDatabase(): void {
 
   // Add sender_name column if it doesn't exist (migration for existing DBs)
   try {
-    db.exec(`ALTER TABLE messages ADD COLUMN sender_name TEXT`);
+    database.exec(`ALTER TABLE messages ADD COLUMN sender_name TEXT`);
   } catch { /* column already exists */ }
 
   // Add context_mode column if it doesn't exist (migration for existing DBs)
   try {
-    db.exec(`ALTER TABLE scheduled_tasks ADD COLUMN context_mode TEXT DEFAULT 'isolated'`);
+    database.exec(`ALTER TABLE scheduled_tasks ADD COLUMN context_mode TEXT DEFAULT 'isolated'`);
   } catch { /* column already exists */ }
 
   // Add retry_count column (migration for existing DBs)
   try {
-    db.exec(`ALTER TABLE scheduled_tasks ADD COLUMN retry_count INTEGER DEFAULT 0`);
+    database.exec(`ALTER TABLE scheduled_tasks ADD COLUMN retry_count INTEGER DEFAULT 0`);
   } catch { /* column already exists */ }
 
   // Add max_retries column (migration for existing DBs)
   try {
-    db.exec(`ALTER TABLE scheduled_tasks ADD COLUMN max_retries INTEGER DEFAULT 3`);
+    database.exec(`ALTER TABLE scheduled_tasks ADD COLUMN max_retries INTEGER DEFAULT 3`);
   } catch { /* column already exists */ }
 
   // Add timeout_ms column (migration for existing DBs)
   try {
-    db.exec(`ALTER TABLE scheduled_tasks ADD COLUMN timeout_ms INTEGER DEFAULT 300000`);
+    database.exec(`ALTER TABLE scheduled_tasks ADD COLUMN timeout_ms INTEGER DEFAULT 300000`);
   } catch { /* column already exists */ }
 
   // Create composite index for efficient due task queries
   try {
-    db.exec(`CREATE INDEX IF NOT EXISTS idx_due_tasks ON scheduled_tasks(status, next_run)`);
-  } catch { /* index already exists */ }
+    database.exec(`CREATE INDEX IF NOT EXISTS idx_due_tasks ON scheduled_tasks(status, next_run)`);
+  } catch { /* column already exists */ }
 }
 
 /**
@@ -110,7 +126,7 @@ export function initDatabase(): void {
 export function storeChatMetadata(chatJid: string, timestamp: string, name?: string): void {
   if (name) {
     // Update with name, preserving existing timestamp if newer
-    db.prepare(`
+    getDb().prepare(`
       INSERT INTO chats (jid, name, last_message_time) VALUES (?, ?, ?)
       ON CONFLICT(jid) DO UPDATE SET
         name = excluded.name,
@@ -118,7 +134,7 @@ export function storeChatMetadata(chatJid: string, timestamp: string, name?: str
     `).run(chatJid, name, timestamp);
   } else {
     // Update timestamp only, preserve existing name if any
-    db.prepare(`
+    getDb().prepare(`
       INSERT INTO chats (jid, name, last_message_time) VALUES (?, ?, ?)
       ON CONFLICT(jid) DO UPDATE SET
         last_message_time = MAX(last_message_time, excluded.last_message_time)
@@ -132,7 +148,7 @@ export function storeChatMetadata(chatJid: string, timestamp: string, name?: str
  * Used during group metadata sync.
  */
 export function updateChatName(chatJid: string, name: string): void {
-  db.prepare(`
+  getDb().prepare(`
     INSERT INTO chats (jid, name, last_message_time) VALUES (?, ?, ?)
     ON CONFLICT(jid) DO UPDATE SET name = excluded.name
   `).run(chatJid, name, new Date().toISOString());
@@ -148,7 +164,7 @@ export interface ChatInfo {
  * Get all known chats, ordered by most recent activity.
  */
 export function getAllChats(): ChatInfo[] {
-  return db.prepare(`
+  return getDb().prepare(`
     SELECT jid, name, last_message_time
     FROM chats
     ORDER BY last_message_time DESC
@@ -160,7 +176,7 @@ export function getAllChats(): ChatInfo[] {
  */
 export function getLastGroupSync(): string | null {
   // Store sync time in a special chat entry
-  const row = db.prepare(`SELECT last_message_time FROM chats WHERE jid = '__group_sync__'`).get() as { last_message_time: string } | undefined;
+  const row = getDb().prepare(`SELECT last_message_time FROM chats WHERE jid = '__group_sync__'`).get() as { last_message_time: string } | undefined;
   return row?.last_message_time || null;
 }
 
@@ -169,7 +185,7 @@ export function getLastGroupSync(): string | null {
  */
 export function setLastGroupSync(): void {
   const now = new Date().toISOString();
-  db.prepare(`INSERT OR REPLACE INTO chats (jid, name, last_message_time) VALUES ('__group_sync__', '__group_sync__', ?)`).run(now);
+  getDb().prepare(`INSERT OR REPLACE INTO chats (jid, name, last_message_time) VALUES ('__group_sync__', '__group_sync__', ?)`).run(now);
 }
 
 /**
@@ -177,7 +193,7 @@ export function setLastGroupSync(): void {
  * Only call this for registered groups where message history is needed.
  */
 export function storeMessage(msg: MessageInput): void {
-  db.prepare(`INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+  getDb().prepare(`INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me) VALUES (?, ?, ?, ?, ?, ?, ?)`)
     .run(msg.id, msg.chatId, msg.senderId, msg.senderName, msg.content, msg.timestamp, msg.isFromMe ? 1 : 0);
 }
 
@@ -193,7 +209,7 @@ export function getNewMessages(jids: string[], lastTimestamp: string, botPrefix:
     ORDER BY timestamp
   `;
 
-  const rows = db.prepare(sql).all(lastTimestamp, ...jids, `${botPrefix}:%`) as NewMessage[];
+  const rows = getDb().prepare(sql).all(lastTimestamp, ...jids, `${botPrefix}:%`) as NewMessage[];
 
   let newTimestamp = lastTimestamp;
   for (const row of rows) {
@@ -211,11 +227,11 @@ export function getMessagesSince(chatJid: string, sinceTimestamp: string, botPre
     WHERE chat_jid = ? AND timestamp > ? AND content NOT LIKE ?
     ORDER BY timestamp
   `;
-  return db.prepare(sql).all(chatJid, sinceTimestamp, `${botPrefix}:%`) as NewMessage[];
+  return getDb().prepare(sql).all(chatJid, sinceTimestamp, `${botPrefix}:%`) as NewMessage[];
 }
 
 export function createTask(task: Omit<ScheduledTask, 'last_run' | 'last_result'>): void {
-  db.prepare(`
+  getDb().prepare(`
     INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, next_run, status, created_at, retry_count, max_retries, timeout_ms)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
@@ -236,15 +252,15 @@ export function createTask(task: Omit<ScheduledTask, 'last_run' | 'last_result'>
 }
 
 export function getTaskById(id: string): ScheduledTask | undefined {
-  return db.prepare('SELECT * FROM scheduled_tasks WHERE id = ?').get(id) as ScheduledTask | undefined;
+  return getDb().prepare('SELECT * FROM scheduled_tasks WHERE id = ?').get(id) as ScheduledTask | undefined;
 }
 
 export function getTasksForGroup(groupFolder: string): ScheduledTask[] {
-  return db.prepare('SELECT * FROM scheduled_tasks WHERE group_folder = ? ORDER BY created_at DESC').all(groupFolder) as ScheduledTask[];
+  return getDb().prepare('SELECT * FROM scheduled_tasks WHERE group_folder = ? ORDER BY created_at DESC').all(groupFolder) as ScheduledTask[];
 }
 
 export function getAllTasks(): ScheduledTask[] {
-  return db.prepare('SELECT * FROM scheduled_tasks ORDER BY created_at DESC').all() as ScheduledTask[];
+  return getDb().prepare('SELECT * FROM scheduled_tasks ORDER BY created_at DESC').all() as ScheduledTask[];
 }
 
 export function updateTask(id: string, updates: Partial<Pick<ScheduledTask, 'prompt' | 'schedule_type' | 'schedule_value' | 'next_run' | 'status' | 'retry_count' | 'max_retries' | 'timeout_ms'>>): void {
@@ -263,18 +279,18 @@ export function updateTask(id: string, updates: Partial<Pick<ScheduledTask, 'pro
   if (fields.length === 0) return;
 
   values.push(id);
-  db.prepare(`UPDATE scheduled_tasks SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+  getDb().prepare(`UPDATE scheduled_tasks SET ${fields.join(', ')} WHERE id = ?`).run(...values);
 }
 
 export function deleteTask(id: string): void {
   // Delete child records first (FK constraint)
-  db.prepare('DELETE FROM task_run_logs WHERE task_id = ?').run(id);
-  db.prepare('DELETE FROM scheduled_tasks WHERE id = ?').run(id);
+  getDb().prepare('DELETE FROM task_run_logs WHERE task_id = ?').run(id);
+  getDb().prepare('DELETE FROM scheduled_tasks WHERE id = ?').run(id);
 }
 
 export function getDueTasks(): ScheduledTask[] {
   const now = new Date().toISOString();
-  return db.prepare(`
+  return getDb().prepare(`
     SELECT * FROM scheduled_tasks
     WHERE status = 'active' AND next_run IS NOT NULL AND next_run <= ?
     ORDER BY next_run
@@ -286,7 +302,7 @@ export function getDueTasks(): ScheduledTask[] {
  * @returns 下一个任务的执行时间（毫秒），如果没有任务则返回 null
  */
 export function getNextWakeTime(): number | null {
-  const row = db.prepare(`
+  const row = getDb().prepare(`
     SELECT next_run FROM scheduled_tasks
     WHERE status = 'active' AND next_run IS NOT NULL
     ORDER BY next_run ASC
@@ -301,7 +317,7 @@ export function getNextWakeTime(): number | null {
  * 获取所有活跃任务（用于调度器初始化）
  */
 export function getActiveTasks(): ScheduledTask[] {
-  return db.prepare(`
+  return getDb().prepare(`
     SELECT * FROM scheduled_tasks
     WHERE status = 'active' AND next_run IS NOT NULL
     ORDER BY next_run ASC
@@ -312,7 +328,7 @@ export function getActiveTasks(): ScheduledTask[] {
  * 更新任务重试信息
  */
 export function updateTaskRetry(id: string, retryCount: number, nextRun: string | null): void {
-  db.prepare(`
+  getDb().prepare(`
     UPDATE scheduled_tasks
     SET retry_count = ?, next_run = ?
     WHERE id = ?
@@ -323,7 +339,7 @@ export function updateTaskRetry(id: string, retryCount: number, nextRun: string 
  * 重置任务重试计数（成功执行后调用）
  */
 export function resetTaskRetry(id: string): void {
-  db.prepare(`
+  getDb().prepare(`
     UPDATE scheduled_tasks
     SET retry_count = 0
     WHERE id = ?
@@ -332,7 +348,7 @@ export function resetTaskRetry(id: string): void {
 
 export function updateTaskAfterRun(id: string, nextRun: string | null, lastResult: string): void {
   const now = new Date().toISOString();
-  db.prepare(`
+  getDb().prepare(`
     UPDATE scheduled_tasks
     SET next_run = ?, last_run = ?, last_result = ?, status = CASE WHEN ? IS NULL THEN 'completed' ELSE status END
     WHERE id = ?
@@ -340,14 +356,14 @@ export function updateTaskAfterRun(id: string, nextRun: string | null, lastResul
 }
 
 export function logTaskRun(log: TaskRunLog): void {
-  db.prepare(`
+  getDb().prepare(`
     INSERT INTO task_run_logs (task_id, run_at, duration_ms, status, result, error)
     VALUES (?, ?, ?, ?, ?, ?)
   `).run(log.task_id, log.run_at, log.duration_ms, log.status, log.result, log.error);
 }
 
 export function getTaskRunLogs(taskId: string, limit = 10): TaskRunLog[] {
-  return db.prepare(`
+  return getDb().prepare(`
     SELECT task_id, run_at, duration_ms, status, result, error
     FROM task_run_logs
     WHERE task_id = ?
@@ -364,7 +380,7 @@ export function getTaskRunLogs(taskId: string, limit = 10): TaskRunLog[] {
  */
 export function getChatHistory(chatJid: string, limit = 50, beforeTimestamp?: string): NewMessage[] {
   if (beforeTimestamp) {
-    return db.prepare(`
+    return getDb().prepare(`
       SELECT id, chat_jid, sender, sender_name, content, timestamp
       FROM messages
       WHERE chat_jid = ? AND timestamp < ?
@@ -373,7 +389,7 @@ export function getChatHistory(chatJid: string, limit = 50, beforeTimestamp?: st
     `).all(chatJid, beforeTimestamp, limit).reverse() as NewMessage[];
   }
   
-  return db.prepare(`
+  return getDb().prepare(`
     SELECT id, chat_jid, sender, sender_name, content, timestamp
     FROM messages
     WHERE chat_jid = ?
@@ -386,7 +402,7 @@ export function getChatHistory(chatJid: string, limit = 50, beforeTimestamp?: st
  * 获取消息统计
  */
 export function getMessageStats(chatJid: string): { totalMessages: number; firstMessage: string | null; lastMessage: string | null } {
-  const stats = db.prepare(`
+  const stats = getDb().prepare(`
     SELECT 
       COUNT(*) as total,
       MIN(timestamp) as first_msg,
@@ -406,7 +422,7 @@ export function getMessageStats(chatJid: string): { totalMessages: number; first
  * 检查消息是否已存在（用于去重）
  */
 export function messageExists(messageId: string, chatJid: string): boolean {
-  const row = db.prepare(`
+  const row = getDb().prepare(`
     SELECT 1 FROM messages WHERE id = ? AND chat_jid = ?
   `).get(messageId, chatJid);
   return !!row;

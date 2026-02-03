@@ -5,6 +5,7 @@
 
 import { promises as fs, watch, FSWatcher } from 'fs';
 import { join, resolve } from 'path';
+import { createHash } from 'crypto';
 import { createJiti } from 'jiti';
 import {
   Plugin,
@@ -26,11 +27,42 @@ const jiti = createJiti(import.meta.url, {
 // 已加载插件的路径映射
 const loadedPaths = new Map<string, string>();
 
+// 插件文件内容的 hash 缓存（用于检测真正的变化）
+const contentHashes = new Map<string, string>();
+
 // 目录监听器
 let watcher: FSWatcher | null = null;
 
 /**
- * 从目录加载所有插件
+ * 计算文件内容的 hash
+ */
+async function getFileHash(filePath: string): Promise<string | null> {
+  try {
+    const content = await fs.readFile(filePath, 'utf-8');
+    return createHash('md5').update(content).digest('hex');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 计算插件目录的 hash（主要文件）
+ */
+async function getPluginHash(pluginPath: string): Promise<string> {
+  const hashes: string[] = [];
+  
+  // 检查主要文件
+  const files = ['plugin.json', 'index.ts', 'index.js'];
+  for (const file of files) {
+    const hash = await getFileHash(join(pluginPath, file));
+    if (hash) hashes.push(hash);
+  }
+  
+  return createHash('md5').update(hashes.join('')).digest('hex');
+}
+
+/**
+ * 从目录加载所有插件（按依赖顺序）
  * @param pluginsDir 插件目录路径
  * @returns 加载成功的插件名称列表
  */
@@ -49,20 +81,90 @@ export async function loadFromDir(pluginsDir: string): Promise<string[]> {
   // 读取目录内容
   const entries = await fs.readdir(dir, { withFileTypes: true });
 
+  // 第一遍：收集所有插件的清单信息
+  const manifests = new Map<string, { path: string; manifest: PluginManifest }>();
+  
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
 
     const pluginPath = join(dir, entry.name);
+    const manifestPath = join(pluginPath, 'plugin.json');
+    
     try {
-      const name = await loadPlugin(pluginPath);
-      if (name) loaded.push(name);
+      const content = await fs.readFile(manifestPath, 'utf-8');
+      const manifest = JSON.parse(content) as PluginManifest;
+      if (manifest.name) {
+        manifests.set(manifest.name, { path: pluginPath, manifest });
+      }
+    } catch {
+      // 忽略无效插件
+      logger.debug({ plugin: entry.name }, '跳过无效插件目录');
+    }
+  }
+
+  // 拓扑排序：按依赖顺序排列插件
+  const sortedNames = topologicalSort(manifests);
+  
+  logger.debug({ order: sortedNames }, '插件加载顺序');
+
+  // 按顺序加载插件
+  for (const name of sortedNames) {
+    const info = manifests.get(name);
+    if (!info) continue;
+
+    try {
+      const loadedName = await loadPlugin(info.path);
+      if (loadedName) loaded.push(loadedName);
     } catch (err) {
-      logger.error({ plugin: entry.name, err }, '加载插件失败');
+      logger.error({ plugin: name, err }, '加载插件失败');
     }
   }
 
   logger.info({ dir, count: loaded.length }, '⚡ 插件加载完成');
   return loaded;
+}
+
+/**
+ * 拓扑排序：按依赖顺序排列插件
+ * 依赖的插件先加载
+ */
+function topologicalSort(
+  manifests: Map<string, { path: string; manifest: PluginManifest }>
+): string[] {
+  const result: string[] = [];
+  const visited = new Set<string>();
+  const visiting = new Set<string>(); // 检测循环依赖
+
+  function visit(name: string) {
+    if (visited.has(name)) return;
+    if (visiting.has(name)) {
+      logger.warn({ plugin: name }, '检测到循环依赖，跳过');
+      return;
+    }
+
+    visiting.add(name);
+
+    const info = manifests.get(name);
+    if (info?.manifest.dependencies) {
+      for (const dep of info.manifest.dependencies) {
+        if (manifests.has(dep)) {
+          visit(dep);
+        } else {
+          logger.warn({ plugin: name, dependency: dep }, '依赖插件不存在');
+        }
+      }
+    }
+
+    visiting.delete(name);
+    visited.add(name);
+    result.push(name);
+  }
+
+  for (const name of manifests.keys()) {
+    visit(name);
+  }
+
+  return result;
 }
 
 /**
@@ -135,8 +237,10 @@ export async function loadPlugin(pluginPath: string): Promise<string | null> {
     return null;
   }
 
-  // 记录路径
+  // 记录路径和 hash
   loadedPaths.set(plugin.name, absPath);
+  const hash = await getPluginHash(absPath);
+  contentHashes.set(plugin.name, hash);
 
   return plugin.name;
 }
@@ -233,9 +337,18 @@ export function watchPlugins(
       } catch {}
 
       if (exists && isLoaded) {
-        // 已加载的插件有变化，重载
-        await reloadPlugin(pluginName);
-        onChange?.('change', pluginName);
+        // 检查内容是否真的变化了
+        const newHash = await getPluginHash(pluginPath);
+        const oldHash = contentHashes.get(pluginName);
+        
+        if (newHash !== oldHash) {
+          // 内容真的变了，重载
+          await reloadPlugin(pluginName);
+          onChange?.('change', pluginName);
+        } else {
+          // 内容没变（可能是 jiti 缓存或访问时间变化），忽略
+          logger.debug({ plugin: pluginName }, '插件文件访问但内容未变，忽略');
+        }
       } else if (exists && !isLoaded) {
         // 新插件，加载
         const name = await loadPlugin(pluginPath);

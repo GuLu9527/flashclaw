@@ -173,7 +173,40 @@ export class PluginManager {
     this.plugins.clear();
     logger.info('⚡ 已清空所有插件');
   }
+
+  /**
+   * 停止所有渠道插件（不清空注册）
+   */
+  async stopAll(): Promise<void> {
+    const promises: Promise<void>[] = [];
+    
+    for (const entry of this.plugins.values()) {
+      if (isChannelPlugin(entry.plugin)) {
+        promises.push(
+          entry.plugin.stop().catch((err) => {
+            logger.warn({ plugin: entry.plugin.name, err }, '停止插件失败');
+          })
+        );
+      }
+    }
+    
+    await Promise.all(promises);
+    logger.info('⚡ 所有渠道插件已停止');
+  }
 }
 
-// 导出单例
-export const pluginManager = new PluginManager();
+// 使用全局变量存储单例，确保 jiti 动态加载的模块也能访问同一个实例
+declare global {
+  // eslint-disable-next-line no-var
+  var __flashclaw_plugin_manager: PluginManager | undefined;
+}
+
+function getPluginManager(): PluginManager {
+  if (!global.__flashclaw_plugin_manager) {
+    global.__flashclaw_plugin_manager = new PluginManager();
+  }
+  return global.__flashclaw_plugin_manager;
+}
+
+// 导出单例（通过全局变量）
+export const pluginManager = getPluginManager();

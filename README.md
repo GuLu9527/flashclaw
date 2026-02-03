@@ -64,6 +64,10 @@ plugins/
 ├── schedule-task/   # 创建定时任务
 ├── list-tasks/      # 列出定时任务
 ├── cancel-task/     # 取消定时任务
+├── pause-task/      # 暂停定时任务
+├── resume-task/     # 恢复定时任务
+├── memory/          # 长期记忆（remember/recall）
+├── register-group/  # 注册群组
 └── my-plugin/       # 你的自定义插件
 ```
 
@@ -137,7 +141,11 @@ flashclaw/
 │   ├── send-message/        # 发消息工具
 │   ├── schedule-task/       # 定时任务工具
 │   ├── list-tasks/          # 列出任务工具
-│   └── cancel-task/         # 取消任务工具
+│   ├── cancel-task/         # 取消任务工具
+│   ├── pause-task/          # 暂停任务工具
+│   ├── resume-task/         # 恢复任务工具
+│   ├── memory/              # 长期记忆工具
+│   └── register-group/      # 注册群组工具
 │
 ├── groups/                   # 群组记忆
 │   ├── global/CLAUDE.md     # 全局记忆

@@ -53,19 +53,24 @@ interface ToolPlugin {
   
   // 执行函数
   execute(
-    params: Record<string, unknown>,
+    params: unknown,
     context: ToolContext
-  ): Promise<string>;
+  ): Promise<ToolResult>;
+}
+
+interface ToolResult {
+  success: boolean;
+  data?: unknown;
+  error?: string;
   
   // 可选：热重载
   reload?(): Promise<void>;
 }
 
 interface ToolContext {
-  chatId: string;
-  groupFolder: string;
-  isMain: boolean;
-  sendMessage: (chatId: string, text: string) => Promise<void>;
+  chatId: string;        // 当前聊天 ID
+  groupId: string;       // 群组文件夹名
+  sendMessage: (content: string) => Promise<void>;  // 发送消息到当前聊天
 }
 ```
 
