@@ -81,6 +81,26 @@ export function initDatabase(): void {
   try {
     db.exec(`ALTER TABLE scheduled_tasks ADD COLUMN context_mode TEXT DEFAULT 'isolated'`);
   } catch { /* column already exists */ }
+
+  // Add retry_count column (migration for existing DBs)
+  try {
+    db.exec(`ALTER TABLE scheduled_tasks ADD COLUMN retry_count INTEGER DEFAULT 0`);
+  } catch { /* column already exists */ }
+
+  // Add max_retries column (migration for existing DBs)
+  try {
+    db.exec(`ALTER TABLE scheduled_tasks ADD COLUMN max_retries INTEGER DEFAULT 3`);
+  } catch { /* column already exists */ }
+
+  // Add timeout_ms column (migration for existing DBs)
+  try {
+    db.exec(`ALTER TABLE scheduled_tasks ADD COLUMN timeout_ms INTEGER DEFAULT 300000`);
+  } catch { /* column already exists */ }
+
+  // Create composite index for efficient due task queries
+  try {
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_due_tasks ON scheduled_tasks(status, next_run)`);
+  } catch { /* index already exists */ }
 }
 
 /**
@@ -196,8 +216,8 @@ export function getMessagesSince(chatJid: string, sinceTimestamp: string, botPre
 
 export function createTask(task: Omit<ScheduledTask, 'last_run' | 'last_result'>): void {
   db.prepare(`
-    INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, next_run, status, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, next_run, status, created_at, retry_count, max_retries, timeout_ms)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     task.id,
     task.group_folder,
@@ -208,7 +228,10 @@ export function createTask(task: Omit<ScheduledTask, 'last_run' | 'last_result'>
     task.context_mode || 'isolated',
     task.next_run,
     task.status,
-    task.created_at
+    task.created_at,
+    task.retry_count ?? 0,
+    task.max_retries ?? 3,
+    task.timeout_ms ?? 300000
   );
 }
 
@@ -224,7 +247,7 @@ export function getAllTasks(): ScheduledTask[] {
   return db.prepare('SELECT * FROM scheduled_tasks ORDER BY created_at DESC').all() as ScheduledTask[];
 }
 
-export function updateTask(id: string, updates: Partial<Pick<ScheduledTask, 'prompt' | 'schedule_type' | 'schedule_value' | 'next_run' | 'status'>>): void {
+export function updateTask(id: string, updates: Partial<Pick<ScheduledTask, 'prompt' | 'schedule_type' | 'schedule_value' | 'next_run' | 'status' | 'retry_count' | 'max_retries' | 'timeout_ms'>>): void {
   const fields: string[] = [];
   const values: unknown[] = [];
 
@@ -233,6 +256,9 @@ export function updateTask(id: string, updates: Partial<Pick<ScheduledTask, 'pro
   if (updates.schedule_value !== undefined) { fields.push('schedule_value = ?'); values.push(updates.schedule_value); }
   if (updates.next_run !== undefined) { fields.push('next_run = ?'); values.push(updates.next_run); }
   if (updates.status !== undefined) { fields.push('status = ?'); values.push(updates.status); }
+  if (updates.retry_count !== undefined) { fields.push('retry_count = ?'); values.push(updates.retry_count); }
+  if (updates.max_retries !== undefined) { fields.push('max_retries = ?'); values.push(updates.max_retries); }
+  if (updates.timeout_ms !== undefined) { fields.push('timeout_ms = ?'); values.push(updates.timeout_ms); }
 
   if (fields.length === 0) return;
 
@@ -253,6 +279,55 @@ export function getDueTasks(): ScheduledTask[] {
     WHERE status = 'active' AND next_run IS NOT NULL AND next_run <= ?
     ORDER BY next_run
   `).all(now) as ScheduledTask[];
+}
+
+/**
+ * 获取下一个将要执行的任务（用于精确定时器）
+ * @returns 下一个任务的执行时间（毫秒），如果没有任务则返回 null
+ */
+export function getNextWakeTime(): number | null {
+  const row = db.prepare(`
+    SELECT next_run FROM scheduled_tasks
+    WHERE status = 'active' AND next_run IS NOT NULL
+    ORDER BY next_run ASC
+    LIMIT 1
+  `).get() as { next_run: string } | undefined;
+  
+  if (!row) return null;
+  return new Date(row.next_run).getTime();
+}
+
+/**
+ * 获取所有活跃任务（用于调度器初始化）
+ */
+export function getActiveTasks(): ScheduledTask[] {
+  return db.prepare(`
+    SELECT * FROM scheduled_tasks
+    WHERE status = 'active' AND next_run IS NOT NULL
+    ORDER BY next_run ASC
+  `).all() as ScheduledTask[];
+}
+
+/**
+ * 更新任务重试信息
+ */
+export function updateTaskRetry(id: string, retryCount: number, nextRun: string | null): void {
+  db.prepare(`
+    UPDATE scheduled_tasks
+    SET retry_count = ?, next_run = ?
+    WHERE id = ?
+  `).run(retryCount, nextRun, id);
+}
+
+/**
+ * 重置任务重试计数（成功执行后调用）
+ */
+export function resetTaskRetry(id: string): void {
+  db.prepare(`
+    UPDATE scheduled_tasks
+    SET retry_count = 0
+    WHERE id = ?
+  `).run(id);
 }
 
 export function updateTaskAfterRun(id: string, nextRun: string | null, lastResult: string): void {

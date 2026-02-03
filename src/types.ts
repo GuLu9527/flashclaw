@@ -43,6 +43,12 @@ export interface ScheduledTask {
   last_result: string | null;
   status: 'active' | 'paused' | 'completed';
   created_at: string;
+  /** 当前重试次数 */
+  retry_count: number;
+  /** 最大重试次数（默认 3） */
+  max_retries: number;
+  /** 任务执行超时时间（毫秒，默认 300000） */
+  timeout_ms?: number;
 }
 
 export interface TaskRunLog {

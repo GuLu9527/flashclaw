@@ -623,6 +623,8 @@ async function processTaskIpc(
     folder?: string;
     trigger?: string;
     agentConfig?: RegisteredGroup['agentConfig'];
+    max_retries?: number;
+    timeout_ms?: number;
   },
   sourceGroup: string,
   isMain: boolean
@@ -689,7 +691,10 @@ async function processTaskIpc(
           context_mode: contextMode,
           next_run: nextRun,
           status: 'active',
-          created_at: new Date().toISOString()
+          created_at: new Date().toISOString(),
+          retry_count: 0,
+          max_retries: data.max_retries ?? 3,
+          timeout_ms: data.timeout_ms ?? 300000
         });
         logger.info({ taskId, sourceGroup, targetGroup, contextMode }, '⚡ 任务已创建');
       }

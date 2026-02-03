@@ -5,6 +5,7 @@
 
 import { ToolPlugin, ToolContext, ToolResult } from '../../src/plugins/types.js';
 import { createTask } from '../../src/db.js';
+import { wake } from '../../src/task-scheduler.js';
 import { CronExpressionParser } from 'cron-parser';
 import { TIMEZONE } from '../../src/config.js';
 
@@ -20,6 +21,10 @@ interface ScheduleTaskParams {
   scheduleValue: string;
   /** 上下文模式：group（共享群组会话）或 isolated（独立会话） */
   contextMode?: 'group' | 'isolated';
+  /** 最大重试次数（默认 3） */
+  maxRetries?: number;
+  /** 任务执行超时时间（毫秒，默认 300000 = 5分钟） */
+  timeoutMs?: number;
 }
 
 /**
@@ -114,6 +119,14 @@ const plugin: ToolPlugin = {
           type: 'string',
           enum: ['group', 'isolated'],
           description: '上下文模式。group 表示共享群组会话历史，isolated 表示独立会话（默认）'
+        },
+        maxRetries: {
+          type: 'number',
+          description: '最大重试次数（默认 3）。任务失败后会自动重试，使用指数退避策略'
+        },
+        timeoutMs: {
+          type: 'number',
+          description: '任务执行超时时间（毫秒，默认 300000 = 5分钟）。超时后任务会被标记为失败并触发重试'
         }
       },
       required: ['prompt', 'scheduleType', 'scheduleValue']
@@ -121,7 +134,14 @@ const plugin: ToolPlugin = {
   },
   
   async execute(params: unknown, context: ToolContext): Promise<ToolResult> {
-    const { prompt, scheduleType, scheduleValue, contextMode = 'isolated' } = params as ScheduleTaskParams;
+    const { 
+      prompt, 
+      scheduleType, 
+      scheduleValue, 
+      contextMode = 'isolated',
+      maxRetries = 3,
+      timeoutMs = 300000
+    } = params as ScheduleTaskParams;
     
     // 参数验证
     if (!prompt || typeof prompt !== 'string') {
@@ -152,6 +172,22 @@ const plugin: ToolPlugin = {
         error: `无效的 cron 表达式: ${scheduleValue}`
       };
     }
+
+    // 验证 maxRetries 范围
+    if (maxRetries < 0 || maxRetries > 10) {
+      return {
+        success: false,
+        error: '最大重试次数必须在 0-10 之间'
+      };
+    }
+
+    // 验证 timeoutMs 范围
+    if (timeoutMs < 1000 || timeoutMs > 30 * 60 * 1000) {
+      return {
+        success: false,
+        error: '超时时间必须在 1秒 到 30分钟 之间'
+      };
+    }
     
     try {
       // 计算下一次运行时间
@@ -171,8 +207,14 @@ const plugin: ToolPlugin = {
         context_mode: contextMode,
         next_run: nextRun,
         status: 'active',
-        created_at: new Date().toISOString()
+        created_at: new Date().toISOString(),
+        retry_count: 0,
+        max_retries: maxRetries,
+        timeout_ms: timeoutMs
       });
+      
+      // 唤醒调度器，重新计算定时器
+      wake();
       
       // 格式化下一次运行时间的友好显示
       const nextRunDate = nextRun ? new Date(nextRun) : null;
@@ -188,6 +230,8 @@ const plugin: ToolPlugin = {
           scheduleType,
           scheduleValue,
           contextMode,
+          maxRetries,
+          timeoutMs,
           nextRun: nextRunDisplay,
           status: 'active'
         }
