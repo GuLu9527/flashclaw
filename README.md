@@ -45,10 +45,13 @@ flashclaw start -d
 | `flashclaw restart` | 重启服务 |
 | `flashclaw status` | 查看运行状态 |
 | `flashclaw plugins list` | 列出所有插件 |
+| `flashclaw plugins enable <name>` | 启用插件 |
+| `flashclaw plugins disable <name>` | 禁用插件 |
 | `flashclaw plugins reload` | 热重载插件 |
 | `flashclaw config list` | 列出所有配置 |
 | `flashclaw config get <key>` | 获取配置值 |
 | `flashclaw config set <key> <value>` | 设置配置值 |
+| `flashclaw config delete <key>` | 删除配置项 |
 | `flashclaw logs` | 查看日志 |
 | `flashclaw logs -f` | 实时日志跟踪 |
 
@@ -80,15 +83,15 @@ plugins/
 
 ### 创建插件
 
-1. 在 `plugins/` 创建文件夹
+1. 在 `~/.flashclaw/plugins/` 创建文件夹
 2. 添加 `plugin.json` 和 `index.ts`
-3. 运行 `flashclaw plugins reload`
+3. 重启服务或运行 `flashclaw plugins reload`
 
 详见 [FLASHCLAW.md](FLASHCLAW.md)
 
 ## 配置
 
-编辑 `.env` 文件：
+配置文件位于 `~/.flashclaw/.env`（首次运行 `flashclaw init` 自动创建）：
 
 ```bash
 # AI API 配置（三选一）
@@ -116,15 +119,34 @@ TIMEZONE=Asia/Shanghai
 
 ## 架构
 
+### 用户数据目录
+
+安装后，FlashClaw 在用户主目录创建配置文件夹：
+
+```
+~/.flashclaw/                 # Windows: C:\Users\用户名\.flashclaw\
+├── .env                     # API 密钥和配置
+├── config/
+│   └── plugins.json         # 插件启用/禁用配置
+├── data/
+│   ├── flashclaw.db         # SQLite 数据库
+│   └── flashclaw.pid        # 进程 PID
+├── logs/
+│   └── flashclaw.log        # 运行日志
+├── plugins/                 # 用户自定义插件
+└── groups/                  # 群组记忆
+```
+
+### 项目结构
+
 ```
 flashclaw/
 ├── src/                      # 核心源码
 │   ├── index.ts             # 主入口、消息路由
 │   ├── cli.ts               # 命令行接口
+│   ├── paths.ts             # 路径管理
 │   ├── agent-runner.ts      # AI Agent 运行器
-│   ├── config.ts            # 配置常量
 │   ├── db.ts                # SQLite 数据库
-│   ├── message-queue.ts     # 消息队列
 │   ├── task-scheduler.ts    # 定时任务调度
 │   ├── core/                # 核心模块
 │   │   ├── api-client.ts    # AI API 客户端
@@ -135,28 +157,17 @@ flashclaw/
 │       ├── loader.ts        # 插件加载器
 │       └── types.ts         # 插件类型定义
 │
-├── plugins/                  # 插件目录（热加载）
-│   ├── feishu/              # 飞书渠道
-│   ├── dingtalk/            # 钉钉渠道
-│   ├── send-message/        # 发消息工具
-│   ├── schedule-task/       # 定时任务工具
-│   ├── list-tasks/          # 列出任务工具
-│   ├── cancel-task/         # 取消任务工具
-│   ├── pause-task/          # 暂停任务工具
-│   ├── resume-task/         # 恢复任务工具
-│   ├── memory/              # 长期记忆工具
-│   └── register-group/      # 注册群组工具
-│
-├── groups/                   # 群组记忆
-│   ├── global/CLAUDE.md     # 全局记忆
-│   └── main/CLAUDE.md       # 主群组记忆
-│
-├── data/                     # 运行时数据
-│   ├── messages.db          # SQLite 数据库
-│   ├── sessions.json        # 会话状态
-│   └── registered_groups.json  # 已注册群组
-│
-└── store/                    # 持久化存储
+└── plugins/                  # 内置插件（10个）
+    ├── feishu/              # 飞书渠道
+    ├── dingtalk/            # 钉钉渠道
+    ├── memory/              # 长期记忆
+    ├── schedule-task/       # 定时任务
+    ├── list-tasks/          # 列出任务
+    ├── cancel-task/         # 取消任务
+    ├── pause-task/          # 暂停任务
+    ├── resume-task/         # 恢复任务
+    ├── send-message/        # 发送消息
+    └── register-group/      # 注册群组
 ```
 
 ## 功能特性
@@ -208,9 +219,9 @@ FlashClaw 支持多层级记忆：
 
 | 层级 | 存储位置 | 作用域 |
 |------|----------|--------|
-| **用户记忆** | `data/memory/users/{userId}.md` | 跨会话共享，同一用户在私聊和群聊中记忆互通 |
-| **会话记忆** | `data/memory/{chatId}.md` | 单个会话内有效 |
-| **全局记忆** | `groups/global/CLAUDE.md` | 所有会话共享的系统提示 |
+| **用户记忆** | `~/.flashclaw/data/memory/users/{userId}.md` | 跨会话共享，同一用户在私聊和群聊中记忆互通 |
+| **会话记忆** | `~/.flashclaw/data/memory/{chatId}.md` | 单个会话内有效 |
+| **全局记忆** | `~/.flashclaw/groups/global/CLAUDE.md` | 所有会话共享的系统提示 |
 
 ```
 用户（私聊）：记住我喜欢吃苹果

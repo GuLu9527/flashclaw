@@ -11,17 +11,15 @@ import path from 'path';
 import { spawn, execSync, ChildProcess } from 'child_process';
 import { fileURLToPath } from 'url';
 import readline from 'readline';
+import { paths, ensureDirectories, getBuiltinPluginsDir } from './paths.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const PROJECT_ROOT = path.resolve(__dirname, '..');
+const PACKAGE_ROOT = path.resolve(__dirname, '..');
 
 // ==================== 常量 ====================
 const VERSION = '1.0.0';
-const PID_FILE = path.join(PROJECT_ROOT, 'data', 'flashclaw.pid');
-const LOG_FILE = path.join(PROJECT_ROOT, 'data', 'flashclaw.log');
-const ENV_FILE = path.join(PROJECT_ROOT, '.env');
-const ENV_EXAMPLE = path.join(PROJECT_ROOT, '.env.example');
+const ENV_EXAMPLE = path.join(PACKAGE_ROOT, '.env.example');
 
 // ==================== 颜色方案 ====================
 const lightning = chalk.yellow('⚡');
@@ -58,7 +56,8 @@ function showBanner(): void {
 // ==================== 工具函数 ====================
 
 function ensureDataDir(): void {
-  const dataDir = path.join(PROJECT_ROOT, 'data');
+  // 使用 paths 模块确保数据目录存在
+  const dataDir = paths.data();
   if (!fs.existsSync(dataDir)) {
     fs.mkdirSync(dataDir, { recursive: true });
   }
@@ -66,8 +65,9 @@ function ensureDataDir(): void {
 
 function getPid(): number | null {
   try {
-    if (fs.existsSync(PID_FILE)) {
-      const pid = parseInt(fs.readFileSync(PID_FILE, 'utf-8').trim(), 10);
+    const pidFile = paths.pidFile();
+    if (fs.existsSync(pidFile)) {
+      const pid = parseInt(fs.readFileSync(pidFile, 'utf-8').trim(), 10);
       return isNaN(pid) ? null : pid;
     }
   } catch {
@@ -121,7 +121,7 @@ function getServiceStatus(): { running: boolean; pid: number | null; uptime?: st
   // PID 文件存在但进程不存在，清理
   if (pid) {
     try {
-      fs.unlinkSync(PID_FILE);
+      fs.unlinkSync(paths.pidFile());
     } catch {
       // ignore
     }
@@ -149,9 +149,10 @@ function formatUptime(ms: number): string {
 
 function loadEnv(): Record<string, string> {
   const env: Record<string, string> = {};
+  const envFile = paths.env();
   try {
-    if (fs.existsSync(ENV_FILE)) {
-      const content = fs.readFileSync(ENV_FILE, 'utf-8');
+    if (fs.existsSync(envFile)) {
+      const content = fs.readFileSync(envFile, 'utf-8');
       for (const line of content.split('\n')) {
         const trimmed = line.trim();
         if (trimmed && !trimmed.startsWith('#')) {
@@ -172,11 +173,12 @@ function loadEnv(): Record<string, string> {
 
 function saveEnv(env: Record<string, string>): void {
   const lines: string[] = [];
+  const envFile = paths.env();
   
   // 保留原有注释和顺序
   try {
-    if (fs.existsSync(ENV_FILE)) {
-      const content = fs.readFileSync(ENV_FILE, 'utf-8');
+    if (fs.existsSync(envFile)) {
+      const content = fs.readFileSync(envFile, 'utf-8');
       const existingKeys = new Set<string>();
       
       for (const line of content.split('\n')) {
@@ -214,7 +216,7 @@ function saveEnv(env: Record<string, string>): void {
     }
   }
   
-  fs.writeFileSync(ENV_FILE, lines.join('\n') + '\n');
+  fs.writeFileSync(envFile, lines.join('\n') + '\n');
 }
 
 // ==================== 交互式初始化 ====================
@@ -312,12 +314,8 @@ async function interactiveInit(): Promise<void> {
     // 保存配置
     saveEnv(env);
     
-    // 确保目录存在
-    ensureDataDir();
-    const groupsDir = path.join(PROJECT_ROOT, 'groups', 'main');
-    if (!fs.existsSync(groupsDir)) {
-      fs.mkdirSync(groupsDir, { recursive: true });
-    }
+    // 确保所有必要目录存在
+    ensureDirectories();
     
     console.log(`\n${lightning}${lightning}${lightning} ${chalk.green.bold('初始化完成!')} ${lightning}${lightning}${lightning}\n`);
     console.log(`${lightning} 下一步:`);
@@ -354,13 +352,13 @@ async function startService(daemon: boolean): Promise<void> {
     process.exit(1);
   }
   
-  const mainScript = path.join(PROJECT_ROOT, 'dist', 'index.js');
+  const mainScript = path.join(PACKAGE_ROOT, 'dist', 'index.js');
   
   // 检查是否已编译
   if (!fs.existsSync(mainScript)) {
     console.log(`${lightning} 正在编译 TypeScript...`);
     try {
-      execSync('npm run build', { cwd: PROJECT_ROOT, stdio: 'inherit' });
+      execSync('npm run build', { cwd: PACKAGE_ROOT, stdio: 'inherit' });
       console.log(`${success} 编译完成`);
     } catch {
       console.log(`${error} 编译失败`);
@@ -368,14 +366,17 @@ async function startService(daemon: boolean): Promise<void> {
     }
   }
   
+  const pidFile = paths.pidFile();
+  const logFile = paths.logFile();
+  
   if (daemon) {
     // 后台模式
     console.log(`${lightning} 正在后台启动 FlashClaw...`);
     
-    const logStream = fs.openSync(LOG_FILE, 'a');
+    const logStream = fs.openSync(logFile, 'a');
     
     const child = spawn('node', [mainScript], {
-      cwd: PROJECT_ROOT,
+      cwd: PACKAGE_ROOT,
       detached: true,
       stdio: ['ignore', logStream, logStream],
       env: { ...process.env, FORCE_COLOR: '1' }
@@ -384,7 +385,7 @@ async function startService(daemon: boolean): Promise<void> {
     child.unref();
     
     // 保存 PID
-    fs.writeFileSync(PID_FILE, String(child.pid));
+    fs.writeFileSync(pidFile, String(child.pid));
     
     // 等待一下检查是否启动成功
     await new Promise(resolve => setTimeout(resolve, 2000));
@@ -394,7 +395,7 @@ async function startService(daemon: boolean): Promise<void> {
       console.log(`${lightning} 查看日志: ${info('flashclaw logs -f')}`);
       console.log(`${lightning} 停止服务: ${info('flashclaw stop')}`);
     } else {
-      console.log(`${error} 启动失败，请检查日志: ${LOG_FILE}`);
+      console.log(`${error} 启动失败，请检查日志: ${logFile}`);
       process.exit(1);
     }
   } else {
@@ -403,18 +404,18 @@ async function startService(daemon: boolean): Promise<void> {
     console.log(`${lightning} 正在启动 FlashClaw...\n`);
     
     const child = spawn('node', [mainScript], {
-      cwd: PROJECT_ROOT,
+      cwd: PACKAGE_ROOT,
       stdio: 'inherit',
       env: { ...process.env, FORCE_COLOR: '1' }
     });
     
     // 保存 PID
-    fs.writeFileSync(PID_FILE, String(child.pid));
+    fs.writeFileSync(pidFile, String(child.pid));
     
     child.on('exit', (code) => {
       // 清理 PID 文件
       try {
-        fs.unlinkSync(PID_FILE);
+        fs.unlinkSync(pidFile);
       } catch {
         // ignore
       }
@@ -459,7 +460,7 @@ async function stopService(): Promise<void> {
     
     // 清理 PID 文件
     try {
-      fs.unlinkSync(PID_FILE);
+      fs.unlinkSync(paths.pidFile());
     } catch {
       // ignore
     }
@@ -498,45 +499,191 @@ function showStatus(): void {
   
   console.log('');
   console.log(`${lightning} ${chalk.bold('路径信息')}\n`);
-  console.log(`   项目: ${chalk.white(PROJECT_ROOT)}`);
-  console.log(`   日志: ${chalk.white(LOG_FILE)}`);
-  console.log(`   配置: ${chalk.white(ENV_FILE)}`);
+  console.log(`   主目录: ${chalk.white(paths.home())}`);
+  console.log(`   日志: ${chalk.white(paths.logFile())}`);
+  console.log(`   配置: ${chalk.white(paths.env())}`);
+  console.log(`   数据库: ${chalk.white(paths.database())}`);
   console.log('');
 }
 
+// ==================== 插件配置管理 ====================
+
+interface PluginsConfig {
+  plugins: Record<string, { enabled: boolean }>;
+  hotReload?: boolean;
+}
+
+function loadPluginsConfig(): PluginsConfig {
+  const pluginsConfigFile = paths.pluginsConfig();
+  try {
+    if (fs.existsSync(pluginsConfigFile)) {
+      return JSON.parse(fs.readFileSync(pluginsConfigFile, 'utf-8'));
+    }
+  } catch {
+    // ignore
+  }
+  return { plugins: {}, hotReload: true };
+}
+
+function savePluginsConfig(config: PluginsConfig): void {
+  const pluginsConfigFile = paths.pluginsConfig();
+  const configDir = path.dirname(pluginsConfigFile);
+  if (!fs.existsSync(configDir)) {
+    fs.mkdirSync(configDir, { recursive: true });
+  }
+  fs.writeFileSync(pluginsConfigFile, JSON.stringify(config, null, 2) + '\n');
+}
+
+function isPluginEnabled(name: string): boolean {
+  const config = loadPluginsConfig();
+  // 默认启用，除非明确禁用
+  return config.plugins[name]?.enabled !== false;
+}
+
+function setPluginEnabled(name: string, enabled: boolean): void {
+  const builtinPluginsDir = getBuiltinPluginsDir();
+  const userPluginsDir = paths.userPlugins();
+  
+  // 检查插件是否存在（内置插件或用户插件）
+  const builtinPluginPath = path.join(builtinPluginsDir, name);
+  const userPluginPath = path.join(userPluginsDir, name);
+  
+  if (!fs.existsSync(builtinPluginPath) && !fs.existsSync(userPluginPath)) {
+    // 尝试通过 manifest name 查找
+    let found = false;
+    
+    // 搜索内置插件
+    if (fs.existsSync(builtinPluginsDir)) {
+      const entries = fs.readdirSync(builtinPluginsDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const manifestPath = path.join(builtinPluginsDir, entry.name, 'plugin.json');
+        try {
+          const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+          if (manifest.name === name) {
+            found = true;
+            break;
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
+    
+    // 搜索用户插件
+    if (!found && fs.existsSync(userPluginsDir)) {
+      const entries = fs.readdirSync(userPluginsDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const manifestPath = path.join(userPluginsDir, entry.name, 'plugin.json');
+        try {
+          const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+          if (manifest.name === name) {
+            found = true;
+            break;
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
+    
+    if (!found) {
+      console.log(`${error} 插件 ${info(name)} 不存在`);
+      console.log(`${lightning} 使用 ${info('flashclaw plugins list')} 查看可用插件`);
+      return;
+    }
+  }
+  
+  const config = loadPluginsConfig();
+  config.plugins[name] = { enabled };
+  savePluginsConfig(config);
+  
+  if (enabled) {
+    console.log(`${success} 已启用插件 ${info(name)}`);
+  } else {
+    console.log(`${success} 已禁用插件 ${info(name)}`);
+  }
+  
+  const status = getServiceStatus();
+  if (status.running) {
+    console.log(`${lightning} 重启服务以应用更改: ${info('flashclaw restart')}`);
+  }
+}
+
 async function listPlugins(): Promise<void> {
-  const pluginsDir = path.join(PROJECT_ROOT, 'plugins');
+  const builtinPluginsDir = getBuiltinPluginsDir();
+  const userPluginsDir = paths.userPlugins();
   
   console.log(`\n${lightning} ${chalk.bold('已安装插件')}\n`);
   
-  if (!fs.existsSync(pluginsDir)) {
-    console.log(`   ${dim('(无插件)')}`);
-    console.log('');
-    return;
+  const plugins: { name: string; version: string; type: string; description: string; enabled: boolean; source: string }[] = [];
+  
+  // 加载内置插件
+  if (fs.existsSync(builtinPluginsDir)) {
+    const entries = fs.readdirSync(builtinPluginsDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      
+      const manifestPath = path.join(builtinPluginsDir, entry.name, 'plugin.json');
+      try {
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+        const name = manifest.name || entry.name;
+        plugins.push({
+          name,
+          version: manifest.version || '0.0.0',
+          type: manifest.type || 'unknown',
+          description: manifest.description || '',
+          enabled: isPluginEnabled(name),
+          source: 'builtin'
+        });
+      } catch {
+        plugins.push({
+          name: entry.name,
+          version: '?',
+          type: '?',
+          description: '(无法读取 plugin.json)',
+          enabled: isPluginEnabled(entry.name),
+          source: 'builtin'
+        });
+      }
+    }
   }
   
-  const entries = fs.readdirSync(pluginsDir, { withFileTypes: true });
-  const plugins: { name: string; version: string; type: string; description: string }[] = [];
-  
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    
-    const manifestPath = path.join(pluginsDir, entry.name, 'plugin.json');
-    try {
-      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
-      plugins.push({
-        name: manifest.name || entry.name,
-        version: manifest.version || '0.0.0',
-        type: manifest.type || 'unknown',
-        description: manifest.description || ''
-      });
-    } catch {
-      plugins.push({
-        name: entry.name,
-        version: '?',
-        type: '?',
-        description: '(无法读取 plugin.json)'
-      });
+  // 加载用户插件
+  if (fs.existsSync(userPluginsDir)) {
+    const entries = fs.readdirSync(userPluginsDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      
+      // 跳过已在内置插件中存在的同名插件
+      if (plugins.some(p => p.name === entry.name)) continue;
+      
+      const manifestPath = path.join(userPluginsDir, entry.name, 'plugin.json');
+      try {
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+        const name = manifest.name || entry.name;
+        // 跳过已在内置插件中存在的同名插件
+        if (plugins.some(p => p.name === name)) continue;
+        
+        plugins.push({
+          name,
+          version: manifest.version || '0.0.0',
+          type: manifest.type || 'unknown',
+          description: manifest.description || '',
+          enabled: isPluginEnabled(name),
+          source: 'user'
+        });
+      } catch {
+        plugins.push({
+          name: entry.name,
+          version: '?',
+          type: '?',
+          description: '(无法读取 plugin.json)',
+          enabled: isPluginEnabled(entry.name),
+          source: 'user'
+        });
+      }
     }
   }
   
@@ -545,14 +692,18 @@ async function listPlugins(): Promise<void> {
   } else {
     for (const plugin of plugins) {
       const typeColor = plugin.type === 'tool' ? chalk.blue : chalk.magenta;
-      console.log(`   ${lightning} ${chalk.white.bold(plugin.name)} ${dim(`v${plugin.version}`)} ${typeColor(`[${plugin.type}]`)}`);
+      const statusIcon = plugin.enabled ? lightning : chalk.gray('○');
+      const nameStyle = plugin.enabled ? chalk.white.bold : chalk.gray;
+      const sourceTag = plugin.source === 'user' ? chalk.cyan(' [用户]') : '';
+      console.log(`   ${statusIcon} ${nameStyle(plugin.name)} ${dim(`v${plugin.version}`)} ${typeColor(`[${plugin.type}]`)}${sourceTag}`);
       if (plugin.description) {
         console.log(`      ${dim(plugin.description)}`);
       }
     }
   }
   
-  console.log(`\n   ${dim(`共 ${plugins.length} 个插件`)}`);
+  const enabledCount = plugins.filter(p => p.enabled).length;
+  console.log(`\n   ${dim(`共 ${plugins.length} 个插件，${enabledCount} 个已启用`)}`);
   console.log('');
 }
 
@@ -628,9 +779,51 @@ function setConfig(key: string, value: string): void {
   }
 }
 
+function deleteConfig(key: string): void {
+  const env = loadEnv();
+  const envFile = paths.env();
+  
+  if (!(key in env)) {
+    console.log(`${warn('⚠')} 配置项 ${info(key)} 不存在`);
+    return;
+  }
+  
+  delete env[key];
+  
+  // 重写 .env 文件，移除该配置项
+  try {
+    if (fs.existsSync(envFile)) {
+      const content = fs.readFileSync(envFile, 'utf-8');
+      const lines = content.split('\n').filter(line => {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) return true;
+        const eqIndex = trimmed.indexOf('=');
+        if (eqIndex > 0) {
+          const lineKey = trimmed.slice(0, eqIndex).trim();
+          return lineKey !== key;
+        }
+        return true;
+      });
+      fs.writeFileSync(envFile, lines.join('\n'));
+    }
+  } catch {
+    // 回退到简单保存
+    saveEnv(env);
+  }
+  
+  console.log(`${success} 已删除配置项 ${info(key)}`);
+  
+  const status = getServiceStatus();
+  if (status.running) {
+    console.log(`${lightning} 重启服务以应用更改: ${info('flashclaw stop && flashclaw start')}`);
+  }
+}
+
 function showLogs(follow: boolean, lines: number): void {
-  if (!fs.existsSync(LOG_FILE)) {
-    console.log(`${warn('⚠')} 日志文件不存在: ${LOG_FILE}`);
+  const logFile = paths.logFile();
+  
+  if (!fs.existsSync(logFile)) {
+    console.log(`${warn('⚠')} 日志文件不存在: ${logFile}`);
     return;
   }
   
@@ -639,7 +832,7 @@ function showLogs(follow: boolean, lines: number): void {
     
     // 先显示最后几行
     try {
-      const content = fs.readFileSync(LOG_FILE, 'utf-8');
+      const content = fs.readFileSync(logFile, 'utf-8');
       const allLines = content.split('\n');
       const lastLines = allLines.slice(-lines);
       console.log(lastLines.join('\n'));
@@ -648,13 +841,13 @@ function showLogs(follow: boolean, lines: number): void {
     }
     
     // 监听文件变化
-    let lastSize = fs.statSync(LOG_FILE).size;
+    let lastSize = fs.statSync(logFile).size;
     
-    const watcher = fs.watch(LOG_FILE, () => {
+    const watcher = fs.watch(logFile, () => {
       try {
-        const stat = fs.statSync(LOG_FILE);
+        const stat = fs.statSync(logFile);
         if (stat.size > lastSize) {
-          const fd = fs.openSync(LOG_FILE, 'r');
+          const fd = fs.openSync(logFile, 'r');
           const buffer = Buffer.alloc(stat.size - lastSize);
           fs.readSync(fd, buffer, 0, buffer.length, lastSize);
           fs.closeSync(fd);
@@ -677,7 +870,7 @@ function showLogs(follow: boolean, lines: number): void {
   } else {
     // 显示最后 N 行
     try {
-      const content = fs.readFileSync(LOG_FILE, 'utf-8');
+      const content = fs.readFileSync(logFile, 'utf-8');
       const allLines = content.split('\n').filter(l => l.trim());
       const lastLines = allLines.slice(-lines);
       
@@ -755,6 +948,20 @@ plugins
     await reloadPlugins();
   });
 
+plugins
+  .command('enable <name>')
+  .description('启用插件')
+  .action((name) => {
+    setPluginEnabled(name, true);
+  });
+
+plugins
+  .command('disable <name>')
+  .description('禁用插件')
+  .action((name) => {
+    setPluginEnabled(name, false);
+  });
+
 // 配置子命令
 const config = program
   .command('config')
@@ -772,6 +979,13 @@ config
   .description('设置配置项')
   .action((key, value) => {
     setConfig(key, value);
+  });
+
+config
+  .command('delete <key>')
+  .description('删除配置项')
+  .action((key) => {
+    deleteConfig(key);
   });
 
 config
@@ -809,6 +1023,9 @@ program
     showBanner();
     program.outputHelp();
   });
+
+// 确保配置目录存在
+ensureDirectories();
 
 // 解析命令行参数
 program.parse();

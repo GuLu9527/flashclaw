@@ -28,3 +28,6 @@ openclaw-main/
 
 # Internal work files
 TODO.md
+
+# Package artifacts
+*.tgz

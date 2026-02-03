@@ -3,7 +3,7 @@
  * 支持动态加载、重载和监听插件目录变化
  */
 
-import { promises as fs, watch, FSWatcher } from 'fs';
+import { promises as fs, watch, FSWatcher, existsSync, readFileSync } from 'fs';
 import { join, resolve } from 'path';
 import { createHash } from 'crypto';
 import { createJiti } from 'jiti';
@@ -16,8 +16,38 @@ import {
 } from './types.js';
 import { pluginManager } from './manager.js';
 import { createLogger } from '../logger.js';
+import { paths } from '../paths.js';
 
 const logger = createLogger('PluginLoader');
+
+interface PluginsConfig {
+  plugins: Record<string, { enabled: boolean }>;
+  hotReload?: boolean;
+}
+
+/**
+ * 加载插件配置
+ */
+function loadPluginsConfig(): PluginsConfig {
+  try {
+    const configFile = paths.pluginsConfig();
+    if (existsSync(configFile)) {
+      return JSON.parse(readFileSync(configFile, 'utf-8'));
+    }
+  } catch {
+    // ignore
+  }
+  return { plugins: {}, hotReload: true };
+}
+
+/**
+ * 检查插件是否启用
+ */
+function isPluginEnabled(name: string): boolean {
+  const config = loadPluginsConfig();
+  // 默认启用，除非明确禁用
+  return config.plugins[name]?.enabled !== false;
+}
 
 // 创建 jiti 实例用于加载 TS 文件
 const jiti = createJiti(import.meta.url, {
@@ -111,6 +141,12 @@ export async function loadFromDir(pluginsDir: string): Promise<string[]> {
   for (const name of sortedNames) {
     const info = manifests.get(name);
     if (!info) continue;
+
+    // 检查插件是否启用
+    if (!isPluginEnabled(name)) {
+      logger.info({ plugin: name }, '⚡ 插件已禁用，跳过加载');
+      continue;
+    }
 
     try {
       const loadedName = await loadPlugin(info.path);

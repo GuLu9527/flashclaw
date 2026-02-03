@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 import { NewMessage, ScheduledTask, TaskRunLog } from './types.js';
-import { STORE_DIR } from './config.js';
+import { paths } from './paths.js';
 
 /**
  * Generic message input for storing messages from any platform
@@ -35,7 +35,7 @@ function getDb(): Database.Database {
 }
 
 export function initDatabase(): void {
-  const dbPath = path.join(STORE_DIR, 'messages.db');
+  const dbPath = paths.database();
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
   const database = new Database(dbPath);

@@ -8,6 +8,7 @@ import fs from 'fs';
 import path from 'path';
 import pino from 'pino';
 
+import { paths, ensureDirectories, getBuiltinPluginsDir } from './paths.js';
 import { pluginManager } from './plugins/manager.js';
 import { loadFromDir, watchPlugins, stopWatching } from './plugins/loader.js';
 import { ChannelPlugin, Message, MessageHandler, SendMessageResult } from './plugins/types.js';
@@ -203,7 +204,7 @@ function registerGroup(chatId: string, group: RegisteredGroup): void {
   saveJson(path.join(DATA_DIR, 'registered_groups.json'), registeredGroups);
 
   // 创建群组文件夹
-  const groupDir = path.join(DATA_DIR, '..', 'groups', group.folder);
+  const groupDir = path.join(paths.groups(), group.folder);
   fs.mkdirSync(path.join(groupDir, 'logs'), { recursive: true });
 
   logger.info({ chatId, name: group.name, folder: group.folder }, '⚡ 群组已注册');
@@ -814,6 +815,9 @@ function displayBanner(enabledPlatforms: string[], groupCount: number): void {
 
 // ==================== 主函数 ====================
 export async function main(): Promise<void> {
+  // 确保所有必要目录存在
+  ensureDirectories();
+  
   // 初始化 API 客户端（全局单例）
   apiClient = getApiClient();
   
@@ -825,13 +829,26 @@ export async function main(): Promise<void> {
   logger.info('⚡ 数据库已初始化');
   
   // 加载插件（在数据库初始化之后）
-  const pluginsDir = path.join(process.cwd(), 'plugins');
-  await loadFromDir(pluginsDir);
+  // 先加载内置插件
+  const builtinPluginsDir = getBuiltinPluginsDir();
+  if (fs.existsSync(builtinPluginsDir)) {
+    logger.info({ dir: builtinPluginsDir }, '⚡ 加载内置插件');
+    await loadFromDir(builtinPluginsDir);
+  }
   
-  // 启用热重载 - 工具插件会自动重载，渠道插件会忽略重载信号
-  watchPlugins(pluginsDir, (event, name) => {
-    logger.info({ event, plugin: name }, '⚡ 插件变化');
-  });
+  // 再加载用户插件（可覆盖内置插件）
+  const userPluginsDir = paths.userPlugins();
+  if (fs.existsSync(userPluginsDir)) {
+    logger.info({ dir: userPluginsDir }, '⚡ 加载用户插件');
+    await loadFromDir(userPluginsDir);
+  }
+  
+  // 启用热重载 - 只监听用户插件目录
+  if (fs.existsSync(userPluginsDir)) {
+    watchPlugins(userPluginsDir, (event, name) => {
+      logger.info({ event, plugin: name }, '⚡ 插件变化');
+    });
+  }
 
   // 初始化渠道管理器
   channelManager = new ChannelManager();
