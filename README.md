@@ -53,10 +53,8 @@ flashclaw start -d
 
 ```bash
 # 从官方仓库安装
+flashclaw plugins install hello-world
 flashclaw plugins install web-fetch
-
-# 从 GitHub 直接安装
-flashclaw plugins install GuLu9527/flashclaw-plugin-browser
 ```
 
 ## 插件系统
@@ -143,6 +141,8 @@ flashclaw/
 ├── src/                      # 核心源码
 │   ├── index.ts             # 主入口、消息路由
 │   ├── cli.ts               # 命令行接口
+│   ├── commands.ts          # 聊天命令处理
+│   ├── session-tracker.ts   # Token 用量追踪
 │   ├── paths.ts             # 路径管理
 │   ├── agent-runner.ts      # AI Agent 运行器
 │   ├── db.ts                # SQLite 数据库
@@ -154,18 +154,23 @@ flashclaw/
 │   └── plugins/             # 插件系统
 │       ├── manager.ts       # 插件管理器
 │       ├── loader.ts        # 插件加载器
+│       ├── installer.ts     # 插件安装器
 │       └── types.ts         # 插件类型定义
 │
-└── plugins/                  # 内置插件（9个）
-    ├── feishu/              # 飞书渠道
-    ├── memory/              # 长期记忆
-    ├── schedule-task/       # 定时任务
-    ├── list-tasks/          # 列出任务
-    ├── cancel-task/         # 取消任务
-    ├── pause-task/          # 暂停任务
-    ├── resume-task/         # 恢复任务
-    ├── send-message/        # 发送消息
-    └── register-group/      # 注册群组
+├── plugins/                  # 内置插件（9个）
+│   ├── feishu/              # 飞书渠道
+│   ├── memory/              # 长期记忆
+│   ├── schedule-task/       # 定时任务
+│   ├── list-tasks/          # 列出任务
+│   ├── cancel-task/         # 取消任务
+│   ├── pause-task/          # 暂停任务
+│   ├── resume-task/         # 恢复任务
+│   ├── send-message/        # 发送消息
+│   ├── register-group/      # 注册群组
+│   └── registry.json        # 可安装插件索引
+│
+└── community-plugins/        # 社区/官方扩展插件
+    └── hello-world/         # 测试插件
 ```
 
 ## 功能特性
