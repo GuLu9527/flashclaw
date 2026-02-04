@@ -299,97 +299,155 @@ async function ensureDir(dir: string): Promise<void> {
 // 注册表管理
 // ============================================================================
 
-const REMOTE_REGISTRY_URL = 'https://raw.githubusercontent.com/GuLu9527/flashclaw/main/plugins/registry.json';
+// GitHub API 地址
+const GITHUB_API_BASE = 'https://api.github.com/repos';
+const OFFICIAL_REPO = 'GuLu9527/flashclaw';
+const COMMUNITY_PLUGINS_PATH = 'community-plugins';
 
 /**
- * 获取插件注册表
- * 优先使用本地注册表，支持远程更新
- * 
- * @param forceRemote 是否强制从远程获取
- * @returns 插件注册表
+ * GitHub 目录项
  */
-export async function getRegistry(forceRemote = false): Promise<Registry> {
-  const localPath = getLocalRegistryPath();
-  const cachedPath = getCachedRegistryPath();
-
-  // 如果强制远程获取
-  if (forceRemote) {
-    log.info('正在从远程获取注册表...');
-    try {
-      const registry = await fetchRemoteRegistry();
-      // 缓存到本地
-      await cacheRegistry(registry);
-      log.success('远程注册表获取成功');
-      return registry;
-    } catch (err) {
-      log.warn(`远程获取失败: ${err instanceof Error ? err.message : String(err)}`);
-      log.info('尝试使用本地注册表...');
-    }
-  }
-
-  // 尝试读取本地注册表
-  try {
-    if (existsSync(localPath)) {
-      const content = await fs.readFile(localPath, 'utf-8');
-      const registry = validateRegistry(JSON.parse(content));
-      log.debug(`使用本地注册表 (版本: ${registry.version})`);
-      return registry;
-    }
-  } catch (err) {
-    log.warn(`读取本地注册表失败: ${err instanceof Error ? err.message : String(err)}`);
-  }
-
-  // 尝试读取缓存的注册表
-  try {
-    if (existsSync(cachedPath)) {
-      const content = await fs.readFile(cachedPath, 'utf-8');
-      const registry = validateRegistry(JSON.parse(content));
-      log.debug(`使用缓存注册表 (版本: ${registry.version})`);
-      return registry;
-    }
-  } catch (err) {
-    log.warn(`读取缓存注册表失败: ${err instanceof Error ? err.message : String(err)}`);
-    try {
-      if (existsSync(cachedPath)) {
-        await fs.rm(cachedPath, { force: true });
-      }
-    } catch {
-      // 忽略清理错误
-    }
-  }
-
-  // 最后尝试远程获取
-  log.info('本地注册表不存在，尝试远程获取...');
-  try {
-    const registry = await fetchRemoteRegistry();
-    await cacheRegistry(registry);
-    return registry;
-  } catch (err) {
-    throw new Error(`无法获取插件注册表: ${err instanceof Error ? err.message : String(err)}`);
-  }
+interface GitHubContentItem {
+  name: string;
+  path: string;
+  type: 'file' | 'dir';
+  download_url?: string;
 }
 
 /**
- * 从远程获取注册表
+ * 从 GitHub API 获取可用插件列表
+ * 直接读取 community-plugins 目录结构
  */
-async function fetchRemoteRegistry(): Promise<Registry> {
-  const response = await fetchWithProxy(REMOTE_REGISTRY_URL);
+async function fetchAvailablePluginsFromGitHub(): Promise<PluginInfo[]> {
+  const apiUrl = `${GITHUB_API_BASE}/${OFFICIAL_REPO}/contents/${COMMUNITY_PLUGINS_PATH}`;
+  log.debug(`获取插件列表: ${apiUrl}`);
+  
+  const response = await fetchWithProxy(apiUrl);
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    throw new Error(`GitHub API 请求失败: HTTP ${response.status}`);
   }
-  const data = await response.json();
-  return validateRegistry(data);
+  
+  const items: GitHubContentItem[] = await response.json();
+  const plugins: PluginInfo[] = [];
+  
+  // 过滤出目录（每个目录就是一个插件）
+  const pluginDirs = items.filter(item => item.type === 'dir');
+  
+  // 并行获取每个插件的 plugin.json
+  const pluginPromises = pluginDirs.map(async (dir) => {
+    try {
+      const pluginJsonUrl = `https://raw.githubusercontent.com/${OFFICIAL_REPO}/main/${COMMUNITY_PLUGINS_PATH}/${dir.name}/plugin.json`;
+      const pluginResponse = await fetchWithProxy(pluginJsonUrl);
+      
+      if (pluginResponse.ok) {
+        const manifest = await pluginResponse.json();
+        return {
+          name: manifest.name || dir.name,
+          description: manifest.description || '无描述',
+          type: manifest.type || 'tool',
+          version: manifest.version || '1.0.0',
+          author: manifest.author || 'unknown',
+          tags: manifest.tags || [],
+        } as PluginInfo;
+      }
+    } catch (err) {
+      log.debug(`获取插件 ${dir.name} 信息失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    return null;
+  });
+  
+  const results = await Promise.all(pluginPromises);
+  for (const plugin of results) {
+    if (plugin) {
+      plugins.push(plugin);
+    }
+  }
+  
+  return plugins;
 }
 
 /**
- * 缓存注册表到本地
+ * 获取可用插件缓存路径
  */
-async function cacheRegistry(registry: Registry): Promise<void> {
+function getPluginsCachePath(): string {
+  return join(getFlashClawHome(), 'cache', 'available-plugins.json');
+}
+
+/**
+ * 缓存可用插件列表
+ */
+async function cacheAvailablePlugins(plugins: PluginInfo[]): Promise<void> {
   const cacheDir = join(getFlashClawHome(), 'cache');
   await ensureDir(cacheDir);
-  const cachedPath = getCachedRegistryPath();
-  await fs.writeFile(cachedPath, JSON.stringify(registry, null, 2), 'utf-8');
-  log.debug(`注册表已缓存到 ${cachedPath}`);
+  const cachePath = getPluginsCachePath();
+  const cacheData = {
+    updated: new Date().toISOString(),
+    plugins,
+  };
+  await fs.writeFile(cachePath, JSON.stringify(cacheData, null, 2), 'utf-8');
+  log.debug(`插件列表已缓存到 ${cachePath}`);
+}
+
+/**
+ * 读取缓存的插件列表
+ */
+async function readCachedPlugins(): Promise<PluginInfo[] | null> {
+  const cachePath = getPluginsCachePath();
+  try {
+    if (existsSync(cachePath)) {
+      const content = await fs.readFile(cachePath, 'utf-8');
+      const data = JSON.parse(content);
+      // 检查缓存是否过期（1小时）
+      const updated = new Date(data.updated);
+      const now = new Date();
+      const hoursDiff = (now.getTime() - updated.getTime()) / (1000 * 60 * 60);
+      if (hoursDiff < 1 && Array.isArray(data.plugins)) {
+        log.debug('使用缓存的插件列表');
+        return data.plugins;
+      }
+    }
+  } catch {
+    // 忽略缓存读取错误
+  }
+  return null;
+}
+
+/**
+ * 获取插件注册表（兼容旧接口）
+ * 现在从 GitHub API 动态获取
+ */
+export async function getRegistry(forceRemote = false): Promise<Registry> {
+  // 获取可用插件列表
+  let plugins: PluginInfo[];
+  
+  if (!forceRemote) {
+    const cached = await readCachedPlugins();
+    if (cached) {
+      plugins = cached;
+    } else {
+      plugins = await fetchAvailablePluginsFromGitHub();
+      await cacheAvailablePlugins(plugins);
+    }
+  } else {
+    log.info('正在从 GitHub 获取最新插件列表...');
+    plugins = await fetchAvailablePluginsFromGitHub();
+    await cacheAvailablePlugins(plugins);
+    log.success('插件列表获取成功');
+  }
+  
+  // 转换为 Registry 格式
+  const pluginsMap: Record<string, PluginInfo> = {};
+  for (const plugin of plugins) {
+    pluginsMap[plugin.name] = plugin;
+  }
+  
+  return {
+    version: new Date().toISOString().split('T')[0],
+    updated: new Date().toISOString(),
+    officialRepo: OFFICIAL_REPO,
+    officialPluginsPath: COMMUNITY_PLUGINS_PATH,
+    plugins: pluginsMap,
+  };
 }
 
 /**
@@ -740,8 +798,9 @@ async function downloadOfficialPlugin(
 
 /**
  * 安装插件
+ * 直接从 community-plugins 目录下载，无需预先检查注册表
  * 
- * @param name 插件名称（注册表中的名称）
+ * @param name 插件名称
  * @returns 是否安装成功
  */
 export async function installPlugin(name: string): Promise<boolean> {
@@ -753,24 +812,6 @@ export async function installPlugin(name: string): Promise<boolean> {
   if (!isValidPluginName(name)) {
     log.error(`插件名称不合法: ${name}`);
     log.info('插件名称只能包含小写字母、数字、- 或 _');
-    return false;
-  }
-
-  // 从注册表获取插件信息
-  let pluginInfo: PluginInfo | null = null;
-  let registry: Registry;
-  
-  try {
-    registry = await getRegistry();
-    pluginInfo = registry.plugins[name];
-    if (!pluginInfo) {
-      log.error(`插件 "${name}" 不在官方插件列表中`);
-      log.info('使用 flashclaw plugins list --available 查看可用插件');
-      return false;
-    }
-    log.info(`找到插件: ${pluginInfo.description}`);
-  } catch (err) {
-    log.error(`获取注册表失败: ${err instanceof Error ? err.message : String(err)}`);
     return false;
   }
 
@@ -786,8 +827,17 @@ export async function installPlugin(name: string): Promise<boolean> {
     await fs.rm(targetDir, { recursive: true, force: true });
   }
 
+  // 构建默认 Registry 结构用于下载
+  const registry: Registry = {
+    version: '1.0.0',
+    updated: new Date().toISOString(),
+    officialRepo: OFFICIAL_REPO,
+    officialPluginsPath: COMMUNITY_PLUGINS_PATH,
+    plugins: {},
+  };
+
   try {
-    // 从官方仓库安装
+    // 从官方仓库安装（直接尝试下载，如果不存在会报错）
     await downloadOfficialPlugin(registry, name, targetDir);
 
     // 验证插件
@@ -805,10 +855,10 @@ export async function installPlugin(name: string): Promise<boolean> {
     const meta = await readInstalledMeta();
     meta[name] = {
       name: name,
-      version: validation.manifest?.version || pluginInfo?.version || '0.0.0',
+      version: validation.manifest?.version || '1.0.0',
       installedAt: new Date().toISOString(),
       source: 'registry',
-      repo: `${registry.officialRepo || 'GuLu9527/flashclaw'}/${registry.officialPluginsPath || 'community-plugins'}/${name}`,
+      repo: `${OFFICIAL_REPO}/${COMMUNITY_PLUGINS_PATH}/${name}`,
     };
     await saveInstalledMeta(meta);
 
@@ -947,22 +997,16 @@ export async function updatePlugin(name: string): Promise<boolean> {
     return false;
   }
 
-  // 获取注册表
-  let registry: Registry;
-  let pluginInfo: PluginInfo | null = null;
-  try {
-    registry = await getRegistry();
-    pluginInfo = registry.plugins[name];
-    if (!pluginInfo) {
-      log.error(`插件 "${name}" 不在官方插件列表中，无法更新`);
-      return false;
-    }
-  } catch (err) {
-    log.error(`获取注册表失败: ${err instanceof Error ? err.message : String(err)}`);
-    return false;
-  }
-
   const meta = await readInstalledMeta();
+
+  // 构建默认 Registry 结构用于下载
+  const registry: Registry = {
+    version: '1.0.0',
+    updated: new Date().toISOString(),
+    officialRepo: OFFICIAL_REPO,
+    officialPluginsPath: COMMUNITY_PLUGINS_PATH,
+    plugins: {},
+  };
 
   const tempInstallDir = join(getFlashClawHome(), 'temp', `update-${name}-${Date.now()}`);
   const backupDir = join(getFlashClawHome(), 'backup', `${name}-${Date.now()}`);
@@ -997,10 +1041,10 @@ export async function updatePlugin(name: string): Promise<boolean> {
     // 更新元数据
     meta[name] = {
       name,
-      version: validation.manifest?.version || pluginInfo.version,
+      version: validation.manifest?.version || '1.0.0',
       installedAt: new Date().toISOString(),
       source: 'registry',
-      repo: `${registry.officialRepo || 'GuLu9527/flashclaw'}/${registry.officialPluginsPath || 'community-plugins'}/${name}`,
+      repo: `${OFFICIAL_REPO}/${COMMUNITY_PLUGINS_PATH}/${name}`,
     };
     await saveInstalledMeta(meta);
 
