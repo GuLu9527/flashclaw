@@ -19,6 +19,7 @@ import {
 import { pluginManager } from './manager.js';
 import { createLogger } from '../logger.js';
 import { paths } from '../paths.js';
+import { substituteEnvVarsDeep } from '../utils/env-substitute.js';
 
 const logger = createLogger('PluginLoader');
 
@@ -44,13 +45,18 @@ interface PluginsConfig {
 }
 
 /**
- * 加载插件配置
+ * 加载插件配置（支持环境变量替换）
+ * 
+ * 配置文件中可以使用:
+ * - ${VAR} - 从环境变量获取值
+ * - ${VAR:-default} - 有默认值的环境变量
  */
 function loadPluginsConfig(): PluginsConfig {
   try {
     const configFile = paths.pluginsConfig();
     if (existsSync(configFile)) {
-      return JSON.parse(readFileSync(configFile, 'utf-8'));
+      const rawConfig = JSON.parse(readFileSync(configFile, 'utf-8'));
+      return substituteEnvVarsDeep(rawConfig);
     }
   } catch {
     // ignore
@@ -439,7 +445,11 @@ export function stopWatching(): void {
 }
 
 /**
- * 从清单构建配置
+ * 从清单构建配置（支持环境变量替换）
+ * 
+ * 配置值中可以使用:
+ * - ${VAR} - 从环境变量获取值
+ * - ${VAR:-default} - 有默认值的环境变量
  */
 function buildConfig(manifest: PluginManifest): PluginConfig {
   const config: PluginConfig = {};
@@ -457,7 +467,8 @@ function buildConfig(manifest: PluginManifest): PluginConfig {
     }
   }
 
-  return config;
+  // 对配置值进行环境变量替换
+  return substituteEnvVarsDeep(config);
 }
 
 /**

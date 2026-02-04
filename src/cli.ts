@@ -69,6 +69,8 @@ ${bold('命令:')}
   ${cyan('plugins uninstall <name>')}    卸载插件
   ${cyan('plugins update <name>')}       更新插件
   ${cyan('plugins update --all')}        更新所有插件
+  ${cyan('config list-backups')}         列出配置备份
+  ${cyan('config restore [n]')}          恢复配置备份（n=1-5，默认1）
   ${cyan('version')}                     显示版本
   ${cyan('help')}                        显示帮助
 
@@ -77,6 +79,8 @@ ${bold('示例:')}
   flashclaw start               启动服务
   flashclaw plugins list        查看已安装插件
   flashclaw plugins install feishu  安装飞书插件
+  flashclaw config restore      恢复最新备份
+  flashclaw config restore 2    恢复第2个备份
 
 ${bold('更多信息:')}
   文档: https://github.com/GuLu9527/flashclaw
@@ -414,6 +418,10 @@ async function main(): Promise<void> {
       await handlePluginsCommand(subcommand, args, flags);
       break;
       
+    case 'config':
+      await handleConfigCommand(subcommand, args);
+      break;
+      
     case 'version':
       showVersion();
       break;
@@ -425,6 +433,72 @@ async function main(): Promise<void> {
     default:
       console.log(red('✗') + ` 未知命令: ${command}`);
       console.log(`\n使用 ${cyan('flashclaw help')} 查看可用命令`);
+      process.exit(1);
+  }
+}
+
+// ==================== 配置管理 ====================
+
+async function handleConfigCommand(
+  subcommand: string | undefined,
+  args: string[]
+): Promise<void> {
+  // 动态导入配置相关模块
+  const { listBackups, restoreConfig } = await import('./utils.js');
+  const { paths } = await import('./paths.js');
+  
+  const configPath = paths.pluginsConfig();
+  
+  switch (subcommand) {
+    case 'list-backups':
+    case 'backups': {
+      const backups = listBackups(configPath);
+      
+      if (backups.length === 0) {
+        console.log(`\n${yellow('⚡')} 暂无配置备份\n`);
+        return;
+      }
+      
+      console.log(`\n📦 ${bold('配置备份')} (${backups.length}):\n`);
+      
+      for (const backup of backups) {
+        const date = backup.modifiedAt.toLocaleString('zh-CN');
+        const size = (backup.size / 1024).toFixed(1);
+        console.log(`  ${green('✓')} ${bold(`备份 #${backup.number}`)}  ${dim(`${date}  ${size} KB`)}`);
+      }
+      
+      console.log(`\n使用 ${cyan('flashclaw config restore [n]')} 恢复备份\n`);
+      break;
+    }
+    
+    case 'restore': {
+      const backupNumber = args[0] ? parseInt(args[0], 10) : 1;
+      
+      if (isNaN(backupNumber) || backupNumber < 1 || backupNumber > 5) {
+        console.log(red('✗') + ' 备份编号必须在 1-5 之间');
+        process.exit(1);
+      }
+      
+      console.log(`${yellow('⚡')} 正在恢复配置备份 #${backupNumber}...`);
+      
+      const success = restoreConfig(configPath, backupNumber);
+      
+      if (success) {
+        console.log(green('✓') + ` 配置已从备份 #${backupNumber} 恢复`);
+        console.log(`\n使用 ${cyan('flashclaw start')} 重启服务以应用更改`);
+      } else {
+        console.log(red('✗') + ` 恢复失败，备份 #${backupNumber} 可能不存在`);
+        console.log(`\n使用 ${cyan('flashclaw config list-backups')} 查看可用备份`);
+        process.exit(1);
+      }
+      break;
+    }
+    
+    default:
+      console.log(red('✗') + ` 未知配置命令: ${subcommand || '(空)'}`);
+      console.log(`\n可用命令:`);
+      console.log(`  ${cyan('flashclaw config list-backups')}   列出配置备份`);
+      console.log(`  ${cyan('flashclaw config restore [n]')}    恢复配置备份（n=1-5）`);
       process.exit(1);
   }
 }
