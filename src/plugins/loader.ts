@@ -4,9 +4,11 @@
  */
 
 import { promises as fs, watch, FSWatcher, existsSync, readFileSync } from 'fs';
-import { join, resolve } from 'path';
+import { join, resolve, dirname, delimiter } from 'path';
 import { createHash } from 'crypto';
 import { createJiti } from 'jiti';
+import { fileURLToPath } from 'url';
+import Module from 'module';
 import {
   Plugin,
   PluginManifest,
@@ -19,6 +21,21 @@ import { createLogger } from '../logger.js';
 import { paths } from '../paths.js';
 
 const logger = createLogger('PluginLoader');
+
+// 确保用户插件可解析到主程序依赖
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const appRoot = resolve(__dirname, '..', '..');
+const appNodeModules = resolve(appRoot, 'node_modules');
+if (existsSync(appNodeModules)) {
+  const existing = process.env.NODE_PATH ? process.env.NODE_PATH.split(delimiter) : [];
+  if (!existing.includes(appNodeModules)) {
+    process.env.NODE_PATH = existing.length > 0
+      ? `${process.env.NODE_PATH}${delimiter}${appNodeModules}`
+      : appNodeModules;
+    Module._initPaths();
+  }
+}
 
 interface PluginsConfig {
   plugins: Record<string, { enabled: boolean }>;
@@ -308,7 +325,7 @@ export async function reloadPlugin(name: string): Promise<boolean> {
   }
 
   // 卸载旧插件
-  pluginManager.unregister(name);
+  await pluginManager.unregister(name);
   loadedPaths.delete(name);
 
   // 重新加载
@@ -391,7 +408,7 @@ export function watchPlugins(
         if (name) onChange?.('add', name);
       } else if (!exists && isLoaded) {
         // 插件被删除，卸载
-        pluginManager.unregister(pluginName);
+        await pluginManager.unregister(pluginName);
         loadedPaths.delete(pluginName);
         onChange?.('remove', pluginName);
       }

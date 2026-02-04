@@ -63,7 +63,7 @@ export class PluginManager {
    * @param name 插件名称
    * @returns 是否卸载成功
    */
-  unregister(name: string): boolean {
+  async unregister(name: string): Promise<boolean> {
     const entry = this.plugins.get(name);
     if (!entry) {
       logger.warn({ plugin: name }, '插件不存在');
@@ -72,9 +72,11 @@ export class PluginManager {
 
     // 如果是渠道插件，先停止
     if (isChannelPlugin(entry.plugin)) {
-      entry.plugin.stop().catch((err) => {
+      try {
+        await entry.plugin.stop();
+      } catch (err) {
         logger.error({ plugin: name, err }, '停止渠道插件失败');
-      });
+      }
     }
 
     this.plugins.delete(name);

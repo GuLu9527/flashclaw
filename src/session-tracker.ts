@@ -5,6 +5,10 @@
  */
 
 import pino from 'pino';
+import { existsSync, readFileSync } from 'fs';
+import { promises as fs } from 'fs';
+import { join } from 'path';
+import { getFlashClawHome } from './paths.js';
 
 const logger = pino({
   level: process.env.LOG_LEVEL || 'info',
@@ -45,6 +49,46 @@ export interface TokenUsage {
 
 // 内存存储 - 按 chatId 存储会话数据
 const sessions = new Map<string, SessionData>();
+
+const SESSION_CACHE_PATH = join(getFlashClawHome(), 'cache', 'session-tracker.json');
+let persistTimer: NodeJS.Timeout | null = null;
+
+function loadSessionsFromDisk(): void {
+  try {
+    if (!existsSync(SESSION_CACHE_PATH)) return;
+    const content = readFileSync(SESSION_CACHE_PATH, 'utf-8');
+    const parsed = JSON.parse(content);
+    if (!Array.isArray(parsed)) return;
+    for (const item of parsed) {
+      if (item && typeof item.chatId === 'string') {
+        sessions.set(item.chatId, item as SessionData);
+      }
+    }
+    logger.debug({ count: sessions.size }, '📊 会话追踪缓存已加载');
+  } catch (error) {
+    logger.warn({ error }, '📊 加载会话追踪缓存失败');
+  }
+}
+
+async function persistSessions(): Promise<void> {
+  try {
+    const cacheDir = join(getFlashClawHome(), 'cache');
+    await fs.mkdir(cacheDir, { recursive: true });
+    const payload = JSON.stringify(Array.from(sessions.values()), null, 2);
+    await fs.writeFile(SESSION_CACHE_PATH, payload, 'utf-8');
+  } catch (error) {
+    logger.warn({ error }, '📊 保存会话追踪缓存失败');
+  }
+}
+
+function schedulePersist(): void {
+  if (persistTimer) return;
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    void persistSessions();
+  }, 1000);
+  persistTimer.unref?.();
+}
 
 // 默认上下文窗口大小（Claude 3.5 Sonnet = 200k）
 const DEFAULT_CONTEXT_WINDOW = 200000;
@@ -90,10 +134,17 @@ export function getSession(chatId: string): SessionData | null {
  */
 export function recordTokenUsage(chatId: string, usage: TokenUsage, model?: string): SessionData {
   const session = getOrCreateSession(chatId, model);
-  
+
+  const inputTokens = Number.isFinite(usage.inputTokens) && usage.inputTokens >= 0 ? usage.inputTokens : 0;
+  const outputTokens = Number.isFinite(usage.outputTokens) && usage.outputTokens >= 0 ? usage.outputTokens : 0;
+
+  if (inputTokens !== usage.inputTokens || outputTokens !== usage.outputTokens) {
+    logger.warn({ chatId, usage }, '📊 发现无效 token 数据，已忽略');
+  }
+
   session.messageCount += 1;
-  session.inputTokens += usage.inputTokens;
-  session.outputTokens += usage.outputTokens;
+  session.inputTokens += inputTokens;
+  session.outputTokens += outputTokens;
   session.totalTokens = session.inputTokens + session.outputTokens;
   session.lastActivityAt = new Date().toISOString();
   
@@ -103,10 +154,12 @@ export function recordTokenUsage(chatId: string, usage: TokenUsage, model?: stri
   
   logger.debug({
     chatId,
-    inputTokens: usage.inputTokens,
-    outputTokens: usage.outputTokens,
+    inputTokens,
+    outputTokens,
     totalTokens: session.totalTokens
   }, '📊 Token 使用已记录');
+
+  schedulePersist();
   
   return session;
 }
@@ -114,7 +167,7 @@ export function recordTokenUsage(chatId: string, usage: TokenUsage, model?: stri
 /**
  * 获取模型的上下文窗口大小
  */
-export function getContextWindowSize(model: string): number {
+export function getContextWindowSize(model?: string): number {
   // Claude 模型的上下文窗口
   const contextWindows: Record<string, number> = {
     'claude-4-5-sonnet-20250929': 200000,
@@ -125,6 +178,10 @@ export function getContextWindowSize(model: string): number {
   };
   
   // 匹配模型名称（支持部分匹配）
+  if (!model) {
+    return DEFAULT_CONTEXT_WINDOW;
+  }
+
   for (const [key, value] of Object.entries(contextWindows)) {
     if (model.includes(key) || key.includes(model)) {
       return value;
@@ -147,6 +204,7 @@ export function checkCompactThreshold(chatId: string): number | null {
   if (session.compactSuggested) return null;
   
   const maxTokens = getContextWindowSize(session.model);
+  if (!Number.isFinite(maxTokens) || maxTokens <= 0) return null;
   const usageRate = session.totalTokens / maxTokens;
   
   if (usageRate >= COMPACT_THRESHOLD) {
@@ -162,6 +220,7 @@ export function checkCompactThreshold(chatId: string): number | null {
  */
 export function resetSession(chatId: string): void {
   sessions.delete(chatId);
+  schedulePersist();
   logger.debug({ chatId }, '📊 会话追踪已重置');
 }
 
@@ -180,14 +239,17 @@ export function getSessionStats(chatId: string): {
   if (!session) return null;
   
   const maxTokens = getContextWindowSize(session.model);
-  
+  const usagePercent = maxTokens > 0
+    ? Math.round((session.totalTokens / maxTokens) * 100)
+    : 0;
+
   return {
     messageCount: session.messageCount,
     tokenCount: session.totalTokens,
     maxTokens,
     model: session.model,
     startedAt: session.startedAt,
-    usagePercent: Math.round((session.totalTokens / maxTokens) * 100)
+    usagePercent
   };
 }
 
@@ -215,7 +277,15 @@ export function cleanupStaleSessions(maxAgeMs: number = 24 * 60 * 60 * 1000): nu
   
   if (cleaned > 0) {
     logger.info({ cleaned }, '📊 清理过期会话');
+    schedulePersist();
   }
   
   return cleaned;
 }
+
+// 初始化：加载缓存并定期清理
+loadSessionsFromDisk();
+const cleanupTimer = setInterval(() => {
+  cleanupStaleSessions();
+}, 60 * 60 * 1000);
+cleanupTimer.unref?.();

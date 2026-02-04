@@ -1,0 +1,8 @@
+{
+  "name": "web-fetch",
+  "version": "1.0.0",
+  "type": "tool",
+  "description": "网页内容获取",
+  "main": "index.ts",
+  "author": "GuLu9527"
+}

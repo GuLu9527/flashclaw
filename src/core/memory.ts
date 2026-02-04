@@ -142,6 +142,10 @@ export class MemoryManager {
       const msgTokens = this.estimateMessageTokens(msg);
       
       if (totalTokens + msgTokens > tokenLimit) {
+        // 如果一条消息就超过限制，至少保留最新一条
+        if (result.length === 0) {
+          result.unshift(msg);
+        }
         break;
       }
       
@@ -468,12 +472,11 @@ export class MemoryManager {
    * @returns 估算的 token 数
    */
   estimateTokens(messages: ChatMessage[]): number {
-    let totalChars = 0;
+    let totalTokens = 0;
     for (const msg of messages) {
-      totalChars += msg.content.length;
+      totalTokens += this.estimateMessageTokens(msg);
     }
-    // 使用保守估计：平均 2 字符/token
-    return Math.ceil(totalChars / 2);
+    return totalTokens;
   }
   
   /**
@@ -541,7 +544,18 @@ export class MemoryManager {
     }
     
     // 生成摘要
-    const summary = await this.generateSummary(toCompress, apiClient);
+    let summary = '';
+    try {
+      summary = await this.generateSummary(toCompress, apiClient);
+    } catch (error) {
+      logger.error({ error, groupId }, '生成摘要失败，跳过压缩');
+      return {
+        originalCount,
+        compactedCount: originalCount,
+        summary: '',
+        savedTokens: 0,
+      };
+    }
     
     // 估算节省的 token
     const compressedTokens = this.estimateTokens(toCompress);

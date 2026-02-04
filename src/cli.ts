@@ -23,6 +23,9 @@ const cyan = (text: string) => `${colors.cyan}${text}${colors.reset}`;
 const bold = (text: string) => `${colors.bold}${text}${colors.reset}`;
 const dim = (text: string) => `${colors.dim}${text}${colors.reset}`;
 
+const PLUGIN_NAME_PATTERN = /^[a-z0-9][a-z0-9-_]{0,63}$/;
+const isValidPluginName = (name: string) => PLUGIN_NAME_PATTERN.test(name);
+
 // ==================== 版本信息 ====================
 const VERSION = '1.0.0';
 
@@ -238,6 +241,12 @@ async function installPlugin(name: string): Promise<void> {
     console.log(red('✗') + ' 插件安装器未配置');
     return;
   }
+
+  if (!isValidPluginName(name)) {
+    console.log(red('✗') + ` 插件名称不合法: ${name}`);
+    console.log('插件名称只能包含小写字母、数字、- 或 _');
+    return;
+  }
   
   console.log(`${yellow('⚡')} 正在安装插件 ${cyan(name)}...`);
   
@@ -261,6 +270,12 @@ async function uninstallPlugin(name: string): Promise<void> {
     console.log(red('✗') + ' 插件安装器未配置');
     return;
   }
+
+  if (!isValidPluginName(name)) {
+    console.log(red('✗') + ` 插件名称不合法: ${name}`);
+    console.log('插件名称只能包含小写字母、数字、- 或 _');
+    return;
+  }
   
   console.log(`${yellow('⚡')} 正在卸载插件 ${cyan(name)}...`);
   
@@ -281,6 +296,12 @@ async function updatePlugin(name: string): Promise<void> {
   
   if (!installer) {
     console.log(red('✗') + ' 插件安装器未配置');
+    return;
+  }
+
+  if (!isValidPluginName(name)) {
+    console.log(red('✗') + ` 插件名称不合法: ${name}`);
+    console.log('插件名称只能包含小写字母、数字、- 或 _');
     return;
   }
   

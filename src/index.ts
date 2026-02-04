@@ -11,7 +11,7 @@ import pino from 'pino';
 import { paths, ensureDirectories, getBuiltinPluginsDir } from './paths.js';
 import { pluginManager } from './plugins/manager.js';
 import { loadFromDir, watchPlugins, stopWatching } from './plugins/loader.js';
-import { ChannelPlugin, Message, MessageHandler, SendMessageResult } from './plugins/types.js';
+import { ChannelPlugin, Message, MessageHandler, SendMessageResult, ToolContext } from './plugins/types.js';
 import { ApiClient, getApiClient } from './core/api-client.js';
 import { MemoryManager, getMemoryManager } from './core/memory.js';
 import {
@@ -176,6 +176,14 @@ const HISTORY_CONTEXT_LIMIT = 500;
 // 如需启用，设置环境变量 THINKING_THRESHOLD_MS=2500（毫秒）
 const THINKING_THRESHOLD_MS = Number(process.env.THINKING_THRESHOLD_MS ?? 0);
 
+// 直接网页抓取触发（避免模型不触发工具）
+const WEB_FETCH_TOOL_NAME = 'web_fetch';
+const WEB_FETCH_INTENT_RE = /(抓取|获取|读取|访问|打开|爬取|网页|网站|链接|fetch|web)/i;
+const WEB_FETCH_URL_RE = /https?:\/\/[^\s<>()]+/i;
+const WEB_FETCH_DOMAIN_RE = /(?:^|[^A-Za-z0-9.-])((?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,})(:\d{2,5})?(\/[^\s<>()]*)?/i;
+const TRAILING_PUNCT_RE = /[)\],.。，;；!！?？]+$/;
+const MAX_DIRECT_FETCH_CHARS = 4000;
+
 // ==================== 状态管理 ====================
 
 // 默认的 main 群组配置模板（用于自动注册新会话）
@@ -265,6 +273,100 @@ function shouldTriggerAgent(msg: Message, group: RegisteredGroup): boolean {
   }
 
   return false;
+}
+
+function extractFirstUrl(text: string): string | null {
+  const match = text.match(WEB_FETCH_URL_RE);
+  if (match) {
+    return match[0].replace(TRAILING_PUNCT_RE, '');
+  }
+
+  const domainMatch = text.match(WEB_FETCH_DOMAIN_RE);
+  if (!domainMatch) return null;
+  const host = domainMatch[1];
+  const port = domainMatch[2] ?? '';
+  const path = domainMatch[3] ?? '';
+  const candidate = `https://${host}${port}${path}`;
+  return candidate.replace(TRAILING_PUNCT_RE, '');
+}
+
+function truncateText(text: string, maxLength: number): { text: string; truncated: boolean } {
+  if (text.length <= maxLength) {
+    return { text, truncated: false };
+  }
+  return { text: `${text.slice(0, maxLength)}\n\n...（内容已截断）`, truncated: true };
+}
+
+function formatDirectWebFetchResponse(url: string, result: { success: boolean; data?: unknown; error?: string }): string {
+  if (!result.success) {
+    return `❌ 抓取失败: ${result.error || '未知错误'}`;
+  }
+
+  const data = result.data as { content?: unknown; title?: unknown; status?: unknown; finalUrl?: unknown; contentType?: unknown; bytes?: unknown } | undefined;
+  const content = typeof data?.content === 'string'
+    ? data.content
+    : typeof result.data === 'string'
+      ? result.data
+      : JSON.stringify(result.data ?? {}, null, 2);
+
+  const { text } = truncateText(content, MAX_DIRECT_FETCH_CHARS);
+  const lines: string[] = [];
+  lines.push(`✅ 已抓取: ${typeof data?.finalUrl === 'string' ? data.finalUrl : url}`);
+
+  if (typeof data?.title === 'string' && data.title.trim()) {
+    lines.push(`📝 标题: ${data.title.trim()}`);
+  }
+  if (typeof data?.status === 'number') {
+    lines.push(`📡 状态: ${data.status}`);
+  }
+  if (typeof data?.contentType === 'string') {
+    lines.push(`📄 类型: ${data.contentType}`);
+  }
+  if (typeof data?.bytes === 'number') {
+    lines.push(`📦 大小: ${data.bytes} bytes`);
+  }
+
+  lines.push('');
+  lines.push(text);
+
+  return lines.join('\n');
+}
+
+async function tryHandleDirectWebFetch(msg: Message, group: RegisteredGroup): Promise<boolean> {
+  const content = msg.content?.trim();
+  if (!content) return false;
+
+  if (!WEB_FETCH_INTENT_RE.test(content)) return false;
+  const url = extractFirstUrl(content);
+  if (!url) return false;
+
+  const tool = pluginManager.getTool(WEB_FETCH_TOOL_NAME);
+  if (!tool) {
+    await sendMessage(msg.chatId, `${BOT_NAME}: 未检测到 web_fetch 插件，请先安装后再使用。`, msg.platform);
+    return true;
+  }
+
+  const toolContext: ToolContext = {
+    chatId: msg.chatId,
+    groupId: group.folder,
+    userId: msg.senderId,
+    sendMessage: async (text: string) => {
+      await sendMessage(msg.chatId, `${BOT_NAME}: ${text}`, msg.platform);
+    }
+  };
+
+  logger.info({ chatId: msg.chatId, url }, '⚡ 触发直接网页抓取');
+
+  let result: { success: boolean; data?: unknown; error?: string };
+  try {
+    result = await tool.execute({ url }, toolContext);
+  } catch (error) {
+    result = { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+
+  const response = formatDirectWebFetchResponse(url, result);
+  await sendMessage(msg.chatId, `${BOT_NAME}: ${response}`, msg.platform);
+  return true;
 }
 
 /**
@@ -598,6 +700,11 @@ async function handleIncomingMessage(msg: Message): Promise<void> {
       logger.info({ chatId, command: msg.content }, '⚡ 命令已处理');
       return;
     }
+  }
+
+  // 直接抓取网页（避免模型不触发工具）
+  if (await tryHandleDirectWebFetch(msg, group)) {
+    return;
   }
 
   // 添加到消息队列

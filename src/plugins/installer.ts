@@ -5,13 +5,13 @@
 
 import { promises as fs } from 'fs';
 import { existsSync } from 'fs';
-import { join, basename, dirname } from 'path';
+import { join, basename, dirname, resolve, sep, isAbsolute, normalize } from 'path';
 import { homedir, platform } from 'os';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { fileURLToPath } from 'url';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 // ============================================================================
 // 代理支持
@@ -45,22 +45,21 @@ async function downloadFile(url: string, destPath: string): Promise<void> {
   
   try {
     if (isWindows) {
-      // Windows: 使用 PowerShell 的 Invoke-WebRequest
-      let command = `powershell -NoProfile -Command "`;
-      if (proxyUrl) {
-        command += `$proxy = New-Object System.Net.WebProxy('${proxyUrl}'); `;
-        command += `[System.Net.WebRequest]::DefaultWebProxy = $proxy; `;
-      }
-      command += `Invoke-WebRequest -Uri '${url}' -OutFile '${destPath}' -UseBasicParsing"`;
-      await execAsync(command, { timeout: 120000 }); // 2 分钟超时
+      const script = '& { param([string]$Url,[string]$OutFile,[string]$Proxy) ' +
+        'if ($Proxy) { $proxyObj = New-Object System.Net.WebProxy($Proxy); [System.Net.WebRequest]::DefaultWebProxy = $proxyObj } ' +
+        'Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing }';
+      await execFileAsync(
+        'powershell',
+        ['-NoProfile', '-NonInteractive', '-Command', script, url, destPath, proxyUrl ?? ''],
+        { timeout: 120000, windowsHide: true }
+      );
     } else {
-      // Unix: 使用 curl
-      let command = `curl -L -o "${destPath}"`;
+      const args = ['-fL', '-o', destPath];
       if (proxyUrl) {
-        command += ` -x "${proxyUrl}"`;
+        args.push('-x', proxyUrl);
       }
-      command += ` "${url}"`;
-      await execAsync(command, { timeout: 120000 });
+      args.push(url);
+      await execFileAsync('curl', args, { timeout: 120000 });
     }
   } catch (err) {
     throw new Error(`下载失败: ${err instanceof Error ? err.message : String(err)}`);
@@ -88,15 +87,20 @@ async function fetchWithProxy(url: string): Promise<{ ok: boolean; status: numbe
     let content: string;
     
     if (isWindows) {
-      let command = `powershell -NoProfile -Command "`;
-      command += `$proxy = New-Object System.Net.WebProxy('${proxyUrl}'); `;
-      command += `[System.Net.WebRequest]::DefaultWebProxy = $proxy; `;
-      command += `(Invoke-WebRequest -Uri '${url}' -UseBasicParsing).Content"`;
-      const { stdout } = await execAsync(command, { timeout: 30000 });
-      content = stdout;
+      const script = '& { param([string]$Url,[string]$Proxy) ' +
+        '$proxyObj = New-Object System.Net.WebProxy($Proxy); ' +
+        '[System.Net.WebRequest]::DefaultWebProxy = $proxyObj; ' +
+        '(Invoke-WebRequest -Uri $Url -UseBasicParsing).Content }';
+      const { stdout } = await execFileAsync(
+        'powershell',
+        ['-NoProfile', '-NonInteractive', '-Command', script, url, proxyUrl],
+        { timeout: 30000, windowsHide: true }
+      );
+      content = stdout ?? '';
     } else {
-      const { stdout } = await execAsync(`curl -s -x "${proxyUrl}" "${url}"`, { timeout: 30000 });
-      content = stdout;
+      const args = ['-fsSL', '-x', proxyUrl, url];
+      const { stdout } = await execFileAsync('curl', args, { timeout: 30000 });
+      content = stdout ?? '';
     }
     
     return {
@@ -112,6 +116,40 @@ async function fetchWithProxy(url: string): Promise<{ ok: boolean; status: numbe
     const response = await fetch(url);
     return response;
   }
+}
+
+// ============================================================================
+// 输入校验
+// ============================================================================
+
+const PLUGIN_NAME_PATTERN = /^[a-z0-9][a-z0-9-_]{0,63}$/;
+
+function isValidPluginName(name: string): boolean {
+  return PLUGIN_NAME_PATTERN.test(name);
+}
+
+function resolvePluginDir(baseDir: string, name: string): string | null {
+  if (!isValidPluginName(name)) return null;
+  const base = resolve(baseDir);
+  const target = resolve(baseDir, name);
+  const normalizedBase = base.toLowerCase();
+  const normalizedTarget = target.toLowerCase();
+  if (!normalizedTarget.startsWith(normalizedBase + sep)) return null;
+  return target;
+}
+
+function isSafeRelativePath(value: string): boolean {
+  if (!value || typeof value !== 'string') return false;
+  if (isAbsolute(value)) return false;
+  const segments = value.split(/[\\/]+/);
+  if (segments.some((segment) => segment === '..')) {
+    return false;
+  }
+  const normalized = normalize(value);
+  if (normalized === '..' || normalized.startsWith(`..${sep}`) || normalized.includes(`${sep}..${sep}`)) {
+    return false;
+  }
+  return true;
 }
 
 // ES 模块中获取 __dirname
@@ -170,6 +208,32 @@ export interface Registry {
   officialRepo?: string;       // 官方仓库 (如 GuLu9527/flashclaw)
   officialPluginsPath?: string; // 官方插件在仓库中的路径 (如 community-plugins)
   plugins: Record<string, PluginInfo>;
+}
+
+function validateRegistry(data: unknown): Registry {
+  if (!data || typeof data !== 'object') {
+    throw new Error('注册表格式错误');
+  }
+
+  const registry = data as Registry;
+  if (!registry.plugins || typeof registry.plugins !== 'object') {
+    throw new Error('注册表缺少 plugins 字段');
+  }
+
+  for (const [key, plugin] of Object.entries(registry.plugins)) {
+    if (!plugin || typeof plugin !== 'object') {
+      throw new Error(`插件定义无效: ${key}`);
+    }
+    const p = plugin as PluginInfo;
+    if (!p.name || !p.description || !p.type || !p.version || !p.author) {
+      throw new Error(`插件字段不完整: ${key}`);
+    }
+    if (!Array.isArray(p.tags)) {
+      throw new Error(`插件 tags 必须为数组: ${key}`);
+    }
+  }
+
+  return registry;
 }
 
 /**
@@ -268,7 +332,7 @@ export async function getRegistry(forceRemote = false): Promise<Registry> {
   try {
     if (existsSync(localPath)) {
       const content = await fs.readFile(localPath, 'utf-8');
-      const registry = JSON.parse(content) as Registry;
+      const registry = validateRegistry(JSON.parse(content));
       log.debug(`使用本地注册表 (版本: ${registry.version})`);
       return registry;
     }
@@ -280,12 +344,19 @@ export async function getRegistry(forceRemote = false): Promise<Registry> {
   try {
     if (existsSync(cachedPath)) {
       const content = await fs.readFile(cachedPath, 'utf-8');
-      const registry = JSON.parse(content) as Registry;
+      const registry = validateRegistry(JSON.parse(content));
       log.debug(`使用缓存注册表 (版本: ${registry.version})`);
       return registry;
     }
   } catch (err) {
     log.warn(`读取缓存注册表失败: ${err instanceof Error ? err.message : String(err)}`);
+    try {
+      if (existsSync(cachedPath)) {
+        await fs.rm(cachedPath, { force: true });
+      }
+    } catch {
+      // 忽略清理错误
+    }
   }
 
   // 最后尝试远程获取
@@ -307,7 +378,8 @@ async function fetchRemoteRegistry(): Promise<Registry> {
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
   }
-  return await response.json() as Registry;
+  const data = await response.json();
+  return validateRegistry(data);
 }
 
 /**
@@ -345,6 +417,10 @@ export async function downloadPlugin(
   targetDir: string,
   branch = 'main'
 ): Promise<void> {
+  const repoPattern = /^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/;
+  if (!repoPattern.test(repo)) {
+    throw new Error(`仓库格式不合法: ${repo}`);
+  }
   const zipUrl = `https://github.com/${repo}/archive/refs/heads/${branch}.zip`;
   const tempDir = join(getFlashClawHome(), 'temp');
   const tempZip = join(tempDir, `${repo.replace('/', '-')}-${branch}.zip`);
@@ -376,31 +452,19 @@ export async function downloadPlugin(
     await extractZip(tempZip, extractDir);
 
     // 找到解压后的目录（GitHub ZIP 包含一个以 repo-branch 命名的根目录）
-    const entries = await fs.readdir(extractDir);
-    const repoName = basename(repo);
-    const extractedFolder = entries.find(e => 
-      e.toLowerCase().startsWith(repoName.toLowerCase()) || 
-      e.includes(repoName)
-    );
-    
-    if (!extractedFolder) {
-      // 如果找不到匹配的文件夹，使用第一个目录
-      const firstDir = entries.find(async (e) => {
-        const stat = await fs.stat(join(extractDir, e));
-        return stat.isDirectory();
-      });
-      if (!firstDir) {
-        throw new Error('解压后找不到插件目录');
-      }
-    }
-
-    const sourcePath = join(extractDir, extractedFolder || entries[0]);
-
-    // 检查 sourcePath 是否是目录
-    const stat = await fs.stat(sourcePath);
-    if (!stat.isDirectory()) {
+    const entries = await fs.readdir(extractDir, { withFileTypes: true });
+    const directories = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+    if (directories.length === 0) {
       throw new Error('解压后找不到插件目录');
     }
+
+    const repoName = basename(repo);
+    const extractedFolder = directories.find((dir) =>
+      dir.toLowerCase().startsWith(repoName.toLowerCase()) ||
+      dir.includes(repoName)
+    ) || directories[0];
+
+    const sourcePath = join(extractDir, extractedFolder);
 
     // 复制文件到目标目录
     log.info('正在安装文件...');
@@ -431,19 +495,19 @@ async function extractZip(zipPath: string, destDir: string): Promise<void> {
 
   try {
     if (isWindows) {
-      // Windows: 使用 PowerShell 的 Expand-Archive
-      const command = `powershell -NoProfile -Command "Expand-Archive -Path '${zipPath}' -DestinationPath '${destDir}' -Force"`;
-      await execAsync(command);
+      const script = '& { param([string]$Zip,[string]$Dest) Expand-Archive -Path $Zip -DestinationPath $Dest -Force }';
+      await execFileAsync(
+        'powershell',
+        ['-NoProfile', '-NonInteractive', '-Command', script, zipPath, destDir],
+        { timeout: 120000, windowsHide: true }
+      );
     } else {
-      // Unix: 使用 unzip
-      const command = `unzip -o "${zipPath}" -d "${destDir}"`;
-      await execAsync(command);
+      await execFileAsync('unzip', ['-o', zipPath, '-d', destDir], { timeout: 120000 });
     }
   } catch (err) {
     // 如果系统命令失败，尝试使用 tar 命令（Windows 10+ 支持）
     try {
-      const command = `tar -xf "${zipPath}" -C "${destDir}"`;
-      await execAsync(command);
+      await execFileAsync('tar', ['-xf', zipPath, '-C', destDir], { timeout: 120000 });
     } catch {
       throw new Error(`解压失败: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -540,11 +604,15 @@ export async function validatePlugin(pluginDir: string): Promise<{
     existsSync(srcIndexJs);
 
   if (!hasEntryFile && manifest?.main) {
-    // 检查 manifest 中指定的 main 文件
-    const mainPath = join(pluginDir, manifest.main);
-    const mainTsPath = mainPath.replace(/\.js$/, '.ts');
-    if (!existsSync(mainPath) && !existsSync(mainTsPath)) {
-      errors.push(`入口文件不存在: ${manifest.main}`);
+    if (!isSafeRelativePath(manifest.main)) {
+      errors.push(`入口文件路径不安全: ${manifest.main}`);
+    } else {
+      // 检查 manifest 中指定的 main 文件
+      const mainPath = join(pluginDir, manifest.main);
+      const mainTsPath = mainPath.replace(/\.js$/, '.ts');
+      if (!existsSync(mainPath) && !existsSync(mainTsPath)) {
+        errors.push(`入口文件不存在: ${manifest.main}`);
+      }
     }
   } else if (!hasEntryFile && !manifest?.main) {
     errors.push('缺少入口文件 (index.ts/index.js)');
@@ -606,6 +674,9 @@ async function downloadOfficialPlugin(
 ): Promise<void> {
   const repo = registry.officialRepo || 'GuLu9527/flashclaw';
   const pluginsPath = registry.officialPluginsPath || 'community-plugins';
+  if (!isSafeRelativePath(pluginsPath)) {
+    throw new Error(`官方插件目录路径不安全: ${pluginsPath}`);
+  }
   
   log.step(`从官方仓库安装: ${repo}/${pluginsPath}/${pluginName}`);
   
@@ -631,11 +702,19 @@ async function downloadOfficialPlugin(
     await extractZip(tempZip, extractDir);
     
     // 找到解压后的根目录
-    const entries = await fs.readdir(extractDir);
-    const repoRoot = entries[0]; // 通常是 flashclaw-main
-    
+    const entries = await fs.readdir(extractDir, { withFileTypes: true });
+    const rootEntry = entries.find((entry) => entry.isDirectory());
+    if (!rootEntry) {
+      throw new Error('解压后找不到仓库根目录');
+    }
+    const repoRoot = rootEntry.name; // 通常是 flashclaw-main
+
     // 定位插件目录
-    const pluginSourceDir = join(extractDir, repoRoot, pluginsPath, pluginName);
+    const pluginsRoot = resolve(extractDir, repoRoot, pluginsPath);
+    const pluginSourceDir = resolve(pluginsRoot, pluginName);
+    if (!pluginSourceDir.startsWith(pluginsRoot + sep)) {
+      throw new Error(`插件路径不安全: ${pluginsPath}/${pluginName}`);
+    }
     
     if (!existsSync(pluginSourceDir)) {
       throw new Error(`插件 "${pluginName}" 在官方仓库中不存在 (路径: ${pluginsPath}/${pluginName})`);
@@ -668,6 +747,12 @@ export async function installPlugin(name: string): Promise<boolean> {
   const pluginsDir = getUserPluginsDir();
   await ensureDir(pluginsDir);
 
+  if (!isValidPluginName(name)) {
+    log.error(`插件名称不合法: ${name}`);
+    log.info('插件名称只能包含小写字母、数字、- 或 _');
+    return false;
+  }
+
   // 从注册表获取插件信息
   let pluginInfo: PluginInfo | null = null;
   let registry: Registry;
@@ -686,7 +771,11 @@ export async function installPlugin(name: string): Promise<boolean> {
     return false;
   }
 
-  const targetDir = join(pluginsDir, name);
+  const targetDir = resolvePluginDir(pluginsDir, name);
+  if (!targetDir) {
+    log.error(`插件名称不合法: ${name}`);
+    return false;
+  }
 
   // 检查是否已安装
   if (existsSync(targetDir)) {
@@ -716,7 +805,7 @@ export async function installPlugin(name: string): Promise<boolean> {
       version: validation.manifest?.version || pluginInfo?.version || '0.0.0',
       installedAt: new Date().toISOString(),
       source: 'registry',
-      repo: `${registry.officialRepo}/${registry.officialPluginsPath}/${name}`,
+      repo: `${registry.officialRepo || 'GuLu9527/flashclaw'}/${registry.officialPluginsPath || 'community-plugins'}/${name}`,
     };
     await saveInstalledMeta(meta);
 
@@ -749,7 +838,11 @@ export async function uninstallPlugin(name: string): Promise<boolean> {
   log.info(`准备卸载插件: ${name}`);
 
   const pluginsDir = getUserPluginsDir();
-  const targetDir = join(pluginsDir, name);
+  const targetDir = resolvePluginDir(pluginsDir, name);
+  if (!targetDir) {
+    log.error(`插件名称不合法: ${name}`);
+    return false;
+  }
 
   if (!existsSync(targetDir)) {
     log.error(`插件 "${name}" 未安装`);
@@ -840,51 +933,71 @@ export async function updatePlugin(name: string): Promise<boolean> {
   log.info(`准备更新插件: ${name}`);
 
   const pluginsDir = getUserPluginsDir();
-  const targetDir = join(pluginsDir, name);
+  const targetDir = resolvePluginDir(pluginsDir, name);
+  if (!targetDir) {
+    log.error(`插件名称不合法: ${name}`);
+    return false;
+  }
 
   if (!existsSync(targetDir)) {
     log.error(`插件 "${name}" 未安装`);
     return false;
   }
 
-  // 读取当前安装信息
-  const meta = await readInstalledMeta();
-  const currentMeta = meta[name];
-
-  if (!currentMeta?.repo) {
-    log.error(`插件 "${name}" 没有仓库信息，无法更新`);
-    log.info('提示: 手动安装的本地插件需要手动更新');
+  // 获取注册表
+  let registry: Registry;
+  let pluginInfo: PluginInfo | null = null;
+  try {
+    registry = await getRegistry();
+    pluginInfo = registry.plugins[name];
+    if (!pluginInfo) {
+      log.error(`插件 "${name}" 不在官方插件列表中，无法更新`);
+      return false;
+    }
+  } catch (err) {
+    log.error(`获取注册表失败: ${err instanceof Error ? err.message : String(err)}`);
     return false;
   }
 
-  // 备份当前版本
+  const meta = await readInstalledMeta();
+
+  const tempInstallDir = join(getFlashClawHome(), 'temp', `update-${name}-${Date.now()}`);
   const backupDir = join(getFlashClawHome(), 'backup', `${name}-${Date.now()}`);
-  log.step('备份当前版本...');
-  await ensureDir(backupDir);
-  await copyDir(targetDir, backupDir);
 
   try {
-    // 删除旧版本
-    await fs.rm(targetDir, { recursive: true, force: true });
-
-    // 下载新版本
-    await downloadPlugin(currentMeta.repo, targetDir);
+    // 下载新版本到临时目录
+    await downloadOfficialPlugin(registry, name, tempInstallDir);
 
     // 验证新版本
-    const validation = await validatePlugin(targetDir);
+    const validation = await validatePlugin(tempInstallDir);
     if (!validation.valid) {
-      log.error('新版本验证失败，正在回滚...');
-      await fs.rm(targetDir, { recursive: true, force: true });
-      await copyDir(backupDir, targetDir);
-      log.info('已回滚到之前版本');
+      log.error('新版本验证失败:');
+      validation.errors.forEach((e) => log.error(`  - ${e}`));
+      await fs.rm(tempInstallDir, { recursive: true, force: true });
       return false;
+    }
+
+    // 备份当前版本
+    log.step('备份当前版本...');
+    await ensureDir(backupDir);
+    await copyDir(targetDir, backupDir);
+
+    // 替换旧版本
+    await fs.rm(targetDir, { recursive: true, force: true });
+    try {
+      await fs.rename(tempInstallDir, targetDir);
+    } catch {
+      await copyDir(tempInstallDir, targetDir);
+      await fs.rm(tempInstallDir, { recursive: true, force: true });
     }
 
     // 更新元数据
     meta[name] = {
-      ...currentMeta,
-      version: validation.manifest?.version || currentMeta.version,
+      name,
+      version: validation.manifest?.version || pluginInfo.version,
       installedAt: new Date().toISOString(),
+      source: 'registry',
+      repo: `${registry.officialRepo || 'GuLu9527/flashclaw'}/${registry.officialPluginsPath || 'community-plugins'}/${name}`,
     };
     await saveInstalledMeta(meta);
 
@@ -898,7 +1011,7 @@ export async function updatePlugin(name: string): Promise<boolean> {
     return true;
   } catch (err) {
     log.error(`更新失败: ${err instanceof Error ? err.message : String(err)}`);
-    
+
     // 尝试回滚
     try {
       if (existsSync(backupDir)) {
@@ -911,6 +1024,15 @@ export async function updatePlugin(name: string): Promise<boolean> {
       }
     } catch {
       log.error('回滚失败，请手动恢复');
+    }
+
+    // 清理临时目录
+    try {
+      if (existsSync(tempInstallDir)) {
+        await fs.rm(tempInstallDir, { recursive: true, force: true });
+      }
+    } catch {
+      // ignore
     }
 
     return false;
