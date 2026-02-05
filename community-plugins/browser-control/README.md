@@ -201,6 +201,29 @@ flashclaw plugins install browser-control
 }
 ```
 
+### 截图并发送给用户
+
+截图后可通过 `send_message` 工具发送给用户：
+
+```json
+// 1. 先截图
+{
+  "tool": "browser_screenshot",
+  "args": {}
+}
+
+// 2. 发送截图
+{
+  "tool": "send_message",
+  "args": {
+    "image": "latest_screenshot",
+    "caption": "这是当前页面截图"
+  }
+}
+```
+
+> **注意**：飞书发送图片需要开通 `im:resource:upload` 或 `im:resource` 权限。
+
 ## 元素引用系统
 
 插件使用基于角色的元素引用系统，通过 `browser_snapshot` 获取页面快照时，会为可交互元素生成唯一引用（如 e1, e2, e3...）。

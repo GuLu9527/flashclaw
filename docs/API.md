@@ -80,6 +80,7 @@ interface ToolContext {
   groupId: string;       // 群组文件夹名
   userId: string;        // 用户 ID（用于用户级别记忆）
   sendMessage: (content: string) => Promise<void>;  // 发送消息到当前聊天
+  sendImage: (imageData: string, caption?: string) => Promise<void>;  // 发送图片到当前聊天
 }
 
 interface ToolSchema {
