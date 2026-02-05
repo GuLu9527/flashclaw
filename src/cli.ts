@@ -8,6 +8,17 @@ import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
+// 尝试解决 Windows 中文乱码问题
+if (process.platform === 'win32') {
+  try {
+    const { execSync } = await import('child_process');
+    // 设置活动代码页为 UTF-8 (65001)
+    execSync('chcp 65001', { stdio: 'ignore' });
+  } catch {
+    // 忽略错误，某些环境可能没有权限
+  }
+}
+
 // ==================== ANSI 颜色代码 ====================
 const colors = {
   green: '\x1b[32m',
