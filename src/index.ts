@@ -616,22 +616,61 @@ async function processQueuedMessage(queuedMsg: QueuedMessage<Message>): Promise<
         logger.debug({ chatId, messageId: placeholderMessageId, err: deleteErr }, '删除占位消息失败（无响应）');
       }
     }
-  } catch (err) {
+  } catch (err: any) {
     thinkingDone = true;
     if (thinkingTimer) {
       clearTimeout(thinkingTimer);
     }
+
+    logger.error({ chatId, err }, '处理消息失败');
     
-    // 删除占位消息
-    if (placeholderMessageId) {
-      try {
-        await channelManager.deleteMessage(placeholderMessageId, msg.platform);
-      } catch (deleteErr) {
-        logger.debug({ chatId, messageId: placeholderMessageId, err: deleteErr }, '删除占位消息失败（错误恢复）');
+    // 构建错误提示信息
+    let errorDisplay = '处理消息时发生未知错误';
+    let shouldRethrow = true;
+
+    if (err instanceof Error && err.message.startsWith('Agent 错误:')) {
+      shouldRethrow = false; // Agent 错误通常无需重试
+      const rawError = err.message.replace('Agent 错误:', '').trim();
+      
+      if (rawError.includes('403') || rawError.includes('Request not allowed')) {
+        errorDisplay = 'Agent 调用被拒绝 (403)。请检查配置或权限。';
+      } else if (rawError.includes('401')) {
+        errorDisplay = 'Agent 认证失败 (401)。请检查 API Key。';
+      } else if (rawError.includes('Missing ANTHROPIC_API_KEY')) {
+        errorDisplay = '未配置 Agent API Key，请联系管理员。';
+      } else {
+        // 尝试解析 JSON 错误
+        try {
+          const jsonMatch = rawError.match(/\{.*\}/);
+          if (jsonMatch) {
+            const errorObj = JSON.parse(jsonMatch[0]);
+            errorDisplay = errorObj.error?.message || rawError;
+          } else {
+            errorDisplay = rawError;
+          }
+        } catch {
+          errorDisplay = rawError;
+        }
       }
     }
+
+    const errorText = `${BOT_NAME}: ❌ ${errorDisplay}`;
+
+    // 更新占位消息或发送新消息
+    if (placeholderMessageId) {
+      try {
+        await channelManager.updateMessage(placeholderMessageId, errorText, msg.platform);
+      } catch (updateErr) {
+        // 更新失败（例如消息已删），尝试发送新消息
+        await sendMessage(chatId, errorText, msg.platform).catch(() => {});
+      }
+    } else {
+      await sendMessage(chatId, errorText, msg.platform).catch(() => {});
+    }
     
-    throw err;
+    if (shouldRethrow) {
+      throw err;
+    }
   }
 }
 
@@ -870,13 +909,13 @@ async function executeAgent(group: RegisteredGroup, prompt: string, chatId: stri
 
     if (output.status === 'error') {
       logger.error({ group: group.name, error: output.error }, 'Agent 错误');
-      return null;
+      throw new Error(`Agent 错误: ${output.error}`);
     }
 
     return output.result;
   } catch (err) {
     logger.error({ group: group.name, err }, 'Agent 执行失败');
-    return null;
+    throw err;
   }
 }
 
