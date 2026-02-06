@@ -3,12 +3,9 @@
  * 高并发消息排队处理，防止消息丢失
  */
 
-import pino from 'pino';
+import { createLogger } from './logger.js';
 
-const logger = pino({
-  level: process.env.LOG_LEVEL || 'info',
-  transport: { target: 'pino-pretty', options: { colorize: true } }
-});
+const logger = createLogger('MessageQueue');
 
 export interface QueuedMessage<T> {
   id: string;
@@ -45,6 +42,8 @@ export class MessageQueue<T> {
 
   // 去重 TTL (10 分钟)
   private readonly SEEN_TTL_MS = 10 * 60 * 1000;
+  // 去重缓存硬上限（防止高负载下无限增长）
+  private readonly MAX_SEEN_ENTRIES = 10000;
 
   constructor(processor: MessageProcessor<T>, config: Partial<QueueConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -126,11 +125,13 @@ export class MessageQueue<T> {
 
   /**
    * 处理下一条消息
+   * 使用同步的 Set 检查确保同一 chatId 不会被并发处理
    */
   private async processNext(chatId: string): Promise<void> {
     if (!this.isRunning) return;
     
-    // 检查是否已在处理该聊天
+    // 原子检查：如果已在处理该聊天，直接返回
+    // Node.js 单线程模型下，同步代码块内的检查和添加是原子的
     if (this.processing.has(chatId)) {
       return;
     }
@@ -145,9 +146,11 @@ export class MessageQueue<T> {
       return;
     }
 
+    // 立即标记为处理中（在任何 await 之前），确保不会重复进入
+    this.processing.add(chatId);
+    
     // 取出消息
     const message = queue.shift()!;
-    this.processing.add(chatId);
 
     let timeoutId: NodeJS.Timeout | undefined;
     try {
@@ -204,10 +207,21 @@ export class MessageQueue<T> {
   }
 
   /**
-   * 标记消息已见
+   * 标记消息已见（超过上限时移除最旧的条目）
    */
   private markSeen(messageId: string): void {
     this.seenMessages.set(messageId, Date.now());
+    
+    // 硬上限保护：超过上限时批量清理最旧的条目
+    if (this.seenMessages.size > this.MAX_SEEN_ENTRIES) {
+      const toRemove = this.seenMessages.size - this.MAX_SEEN_ENTRIES + Math.floor(this.MAX_SEEN_ENTRIES * 0.1); // 多清理 10%
+      const keys = this.seenMessages.keys();
+      for (let i = 0; i < toRemove; i++) {
+        const key = keys.next().value;
+        if (key !== undefined) this.seenMessages.delete(key);
+      }
+      logger.debug({ removed: toRemove, remaining: this.seenMessages.size }, 'Evicted old seen messages (hard limit)');
+    }
   }
 
   /**

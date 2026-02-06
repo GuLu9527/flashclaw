@@ -18,6 +18,7 @@ import { ApiClient, getApiClient } from './core/api-client.js';
 import { MemoryManager, getMemoryManager } from './core/memory.js';
 import {
   BOT_NAME,
+  DEFAULT_AI_MODEL,
   MAIN_GROUP_FOLDER,
   IPC_POLL_INTERVAL,
   TIMEZONE,
@@ -50,7 +51,7 @@ import { runAgent, writeTasksSnapshot, writeGroupsSnapshot, AvailableGroup } fro
 import { loadJson, saveJson } from './utils.js';
 import { MessageQueue, QueuedMessage } from './message-queue.js';
 import { isCommand, handleCommand, CommandContext, shouldSuggestCompact, getCompactSuggestion } from './commands.js';
-import { getSessionStats as getTrackerStats, resetSession as resetTrackerSession, checkCompactThreshold, getContextWindowSize } from './session-tracker.js';
+import { getSessionStats as getTrackerStats, resetSession as resetTrackerSession, checkCompactThreshold, getContextWindowSize, shutdownSessionTracker } from './session-tracker.js';
 import Database from 'better-sqlite3';
 
 // 声明全局数据库变量类型（与 db.ts 保持一致）
@@ -692,10 +693,14 @@ async function processQueuedMessage(queuedMsg: QueuedMessage<Message>): Promise<
         await channelManager.updateMessage(placeholderMessageId, errorText, msg.platform);
       } catch (updateErr) {
         // 更新失败（例如消息已删），尝试发送新消息
-        await sendMessage(chatId, errorText, msg.platform).catch(() => {});
+        await sendMessage(chatId, errorText, msg.platform).catch((sendErr) => {
+          logger.warn({ chatId, sendErr }, '发送错误消息也失败');
+        });
       }
     } else {
-      await sendMessage(chatId, errorText, msg.platform).catch(() => {});
+      await sendMessage(chatId, errorText, msg.platform).catch((sendErr) => {
+        logger.warn({ chatId, sendErr }, '发送错误消息失败');
+      });
     }
     
     if (shouldRethrow) {
@@ -805,7 +810,7 @@ async function handleIncomingMessage(msg: Message): Promise<void> {
         }
         // 回退到历史记录（服务重启后 tracker 数据会丢失）
         const history = getChatHistory(chatId, 1000);
-        const model = process.env.AI_MODEL || 'claude-4-5-sonnet-20250929';
+        const model = DEFAULT_AI_MODEL;
         return {
           messageCount: history.length,
           tokenCount: 0, // 服务重启后需要重新统计
@@ -977,7 +982,25 @@ function startIpcWatcher(): void {
   const ipcBaseDir = path.join(paths.data(), 'ipc');
   fs.mkdirSync(ipcBaseDir, { recursive: true });
 
+  let ipcProcessing = false; // 并发保护标志
+
   const processIpcFiles = async () => {
+    // 防止并发执行：如果上一次还没处理完，跳过本次
+    if (ipcProcessing) {
+      setTimeout(processIpcFiles, IPC_POLL_INTERVAL);
+      return;
+    }
+    ipcProcessing = true;
+    
+    try {
+      await processIpcFilesInternal();
+    } finally {
+      ipcProcessing = false;
+      setTimeout(processIpcFiles, IPC_POLL_INTERVAL);
+    }
+  };
+  
+  const processIpcFilesInternal = async () => {
     let groupFolders: string[];
     try {
       groupFolders = fs.readdirSync(ipcBaseDir).filter(f => {
@@ -986,7 +1009,6 @@ function startIpcWatcher(): void {
       });
     } catch (err) {
       logger.error({ err }, '读取 IPC 目录失败');
-      setTimeout(processIpcFiles, IPC_POLL_INTERVAL);
       return;
     }
 
@@ -1083,8 +1105,6 @@ function startIpcWatcher(): void {
         logger.error({ err, sourceGroup }, '读取 IPC 任务目录失败');
       }
     }
-
-    setTimeout(processIpcFiles, IPC_POLL_INTERVAL);
   };
 
   processIpcFiles();
@@ -1502,7 +1522,11 @@ async function gracefulShutdown(signal: string): Promise<void> {
     logger.info('⚡ 停止健康检查服务...');
     stopHealthServer();
     
-    // 9. 保存状态
+    // 9. 关闭 Session Tracker（持久化 + 清理定时器）
+    logger.info('⚡ 关闭 Session Tracker...');
+    await shutdownSessionTracker();
+    
+    // 10. 保存状态
     logger.info('⚡ 保存状态...');
     saveState();
     

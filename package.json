@@ -56,20 +56,22 @@
     "@larksuiteoapi/node-sdk": "^1.58.0",
     "better-sqlite3": "^11.8.1",
     "chalk": "^5.6.2",
-    "cheerio": "^1.2.0",
     "commander": "^14.0.3",
     "cron-parser": "^5.5.0",
     "dotenv": "^17.2.3",
     "hono": "^4.6.14",
-    "html-to-text": "^9.0.5",
     "jiti": "^2.6.1",
     "p-limit": "^7.2.0",
     "pino": "^9.6.0",
     "pino-pretty": "^13.0.0",
-    "playwright-core": "^1.58.1",
-    "turndown": "^7.2.2",
     "undici": "^7.20.0",
     "zod": "^4.3.6"
+  },
+  "optionalDependencies": {
+    "playwright-core": "^1.58.1",
+    "cheerio": "^1.2.0",
+    "html-to-text": "^9.0.5",
+    "turndown": "^7.2.2"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",

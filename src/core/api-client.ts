@@ -190,7 +190,7 @@ export class ApiClient {
       maxRetries: 0,  // 禁用 SDK 重试，由 chat() 方法统一处理
       timeout: config.timeout ?? 60000,
     });
-    this.model = config.model || 'claude-sonnet-4-20250514';
+    this.model = config.model || 'claude-sonnet-4-20250514'; // 注意：调用方应传入 DEFAULT_AI_MODEL
     this.maxRetries = config.maxRetries ?? 3;
     this.timeout = config.timeout ?? 60000;
   }
@@ -437,6 +437,9 @@ export class ApiClient {
     return this.handleToolUseInternal(response, apiMessages, executeTool, options);
   }
   
+  /** 最大工具调用递归深度，防止无限递归导致栈溢出 */
+  private static readonly MAX_TOOL_CALL_DEPTH = 20;
+
   /**
    * 内部工具调用处理（保持完整的 Anthropic.MessageParam[] 格式）
    * 递归时不需要格式转换，保持 tool_use 和 tool_result 的完整结构
@@ -445,8 +448,13 @@ export class ApiClient {
     response: Anthropic.Message,
     messages: Anthropic.MessageParam[],
     executeTool: ToolExecutor,
-    options?: ChatOptions
+    options?: ChatOptions,
+    depth: number = 0
   ): Promise<string> {
+    // 防止无限递归
+    if (depth >= ApiClient.MAX_TOOL_CALL_DEPTH) {
+      return this.extractText(response) || `[工具调用链过深（超过 ${ApiClient.MAX_TOOL_CALL_DEPTH} 轮），已强制终止]`;
+    }
     // 检查是否有工具调用
     const toolUseBlocks = response.content.filter(
       (block): block is Anthropic.ToolUseBlock => block.type === 'tool_use'
@@ -513,7 +521,7 @@ export class ApiClient {
     
     // 递归处理多轮工具调用，保持完整消息结构
     if (nextResponse.stop_reason === 'tool_use') {
-      return this.handleToolUseInternal(nextResponse, newMessages, executeTool, options);
+      return this.handleToolUseInternal(nextResponse, newMessages, executeTool, options, depth + 1);
     }
     
     return this.extractText(nextResponse);
@@ -681,7 +689,7 @@ export function createApiClient(): ApiClient | null {
   return new ApiClient({
     apiKey,
     baseURL: process.env.ANTHROPIC_BASE_URL,
-    model: process.env.AI_MODEL || process.env.ANTHROPIC_MODEL,
+    model: process.env.AI_MODEL || process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-20250514',
     maxRetries: process.env.API_MAX_RETRIES ? (parseInt(process.env.API_MAX_RETRIES, 10) || undefined) : undefined,
     timeout: process.env.API_TIMEOUT ? (parseInt(process.env.API_TIMEOUT, 10) || undefined) : undefined,
   });

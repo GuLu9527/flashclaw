@@ -62,6 +62,7 @@ interface BrowserControlGlobalState {
   roleRefsByTarget: Map<string, RoleRefMap>;
   cached: ConnectedBrowser | null;
   connecting: Promise<ConnectedBrowser> | null;
+  lastTargetId?: string | null;
 }
 
 // Initialize or retrieve global state
@@ -169,6 +170,7 @@ function ensurePageState(page: Page): PageState {
 
     // Cleanup on page close
     page.on("close", () => {
+      targetIdCache.delete(page);
       if (state.roleRefsTargetId && state.roleRefsCdpUrl) {
         const globalState = getGlobalState();
         globalState.roleRefsByTarget.delete(
@@ -194,15 +196,25 @@ function observeBrowser(browser: Browser): void {
   }
 }
 
+/** Cache targetId per page to avoid repeated CDP sessions */
+const targetIdCache = new WeakMap<Page, string>();
+
 /** Get page target ID via CDP */
-async function getPageTargetId(page: Page): Promise<string | null> {
+export async function getPageTargetId(page: Page): Promise<string | null> {
+  // 从缓存获取
+  const cached = targetIdCache.get(page);
+  if (cached) return cached;
+
   try {
     const session = await page.context().newCDPSession(page);
     try {
       const info = await session.send("Target.getTargetInfo") as {
         targetInfo?: { targetId?: string };
       };
-      return info?.targetInfo?.targetId?.trim() || null;
+      const targetId = info?.targetInfo?.targetId?.trim() || null;
+      // 缓存结果
+      if (targetId) targetIdCache.set(page, targetId);
+      return targetId;
     } finally {
       await session.detach().catch(() => {});
     }
@@ -311,13 +323,31 @@ export async function getPage(cdpUrl: string, targetId?: string): Promise<Page> 
     throw new Error("No pages available in the connected browser.");
   }
 
-  let page: Page;
+  let page: Page | undefined;
   let resolvedTargetId: string | null = null;
 
-  // Return first page if no target ID specified
+  // 优先使用 lastTargetId 粘性选择（保持 snapshot -> action 连贯性）
   if (!targetId) {
-    page = pages[0];
-    resolvedTargetId = await getPageTargetId(page);
+    const globalState = getGlobalState();
+    const stickyId = globalState.lastTargetId;
+
+    if (stickyId) {
+      // 尝试找到 lastTargetId 对应的页面
+      for (const p of pages) {
+        const tid = await getPageTargetId(p);
+        if (tid === stickyId) {
+          page = p;
+          resolvedTargetId = tid;
+          break;
+        }
+      }
+    }
+
+    // 如果粘性选择找不到，fallback 到第一个页面
+    if (!page) {
+      page = pages[0];
+      resolvedTargetId = await getPageTargetId(page);
+    }
   } else {
     // Find page by target ID
     for (const p of pages) {
@@ -328,28 +358,33 @@ export async function getPage(cdpUrl: string, targetId?: string): Promise<Page> 
         break;
       }
     }
-    
+
     // Fallback: if only one page exists, return it
-    if (!page! && pages.length === 1) {
+    if (!page && pages.length === 1) {
       page = pages[0];
       resolvedTargetId = await getPageTargetId(page);
     }
-    
-    if (!page!) {
+
+    if (!page) {
       throw new Error(`Tab with targetId "${targetId}" not found`);
     }
   }
 
   // Restore roleRefs from cache if page state doesn't have them
   const pageState = ensurePageState(page);
-  const globalState = getGlobalState();
+  const globalState2 = getGlobalState();
   if (!pageState.roleRefs && resolvedTargetId) {
-    const cachedRefs = globalState.roleRefsByTarget.get(roleRefsKey(cdpUrl, resolvedTargetId));
+    const cachedRefs = globalState2.roleRefsByTarget.get(roleRefsKey(cdpUrl, resolvedTargetId));
     if (cachedRefs) {
       pageState.roleRefs = cachedRefs;
       pageState.roleRefsTargetId = resolvedTargetId;
       pageState.roleRefsCdpUrl = normalizeCdpUrl(cdpUrl);
     }
+  }
+
+  // 更新粘性标签页选择
+  if (resolvedTargetId) {
+    getGlobalState().lastTargetId = resolvedTargetId;
   }
 
   return page;

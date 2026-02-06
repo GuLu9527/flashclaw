@@ -6,14 +6,14 @@
 import type { ToolPlugin, ToolContext, ToolResult, ToolSchema } from '../../src/plugins/types.js';
 
 // 导入各功能模块
-import { launchBrowser, isCdpReady, type BrowserInstance } from './launcher.js';
+import { launchBrowser, type BrowserInstance } from './launcher.js';
 import { snapshotAi } from './snapshot.js';
 import {
   connectBrowser,
   getAllPages,
   getPage,
   disconnectBrowser,
-  restoreRoleRefsForTarget,
+  getPageTargetId,
 } from './session.js';
 import {
   navigate,
@@ -56,13 +56,14 @@ let globalCdpUrl: string | null = null;
 /** 最近一次截图的临时文件路径（供 send_message 引用） */
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { writeFileSync, readFileSync, existsSync, unlinkSync } from 'fs';
+import { writeFile } from 'fs/promises';
+import { readFileSync, existsSync, unlinkSync } from 'fs';
 
 const LATEST_SCREENSHOT_PATH = join(tmpdir(), 'flashclaw-latest-screenshot.txt');
 
-/** 保存最近截图到临时文件 */
+/** 保存最近截图到临时文件（异步，不阻塞事件循环） */
 function saveLatestScreenshot(base64: string): void {
-  writeFileSync(LATEST_SCREENSHOT_PATH, base64, 'utf-8');
+  writeFile(LATEST_SCREENSHOT_PATH, base64, 'utf-8').catch(() => {});
 }
 
 /** 获取最近截图（从临时文件读取） */
@@ -364,28 +365,24 @@ function ensureCdpUrl(): string {
  * 执行 browser_launch
  */
 async function executeLaunch(params: BrowserLaunchParams): Promise<ToolResult> {
-  // 如果已有浏览器实例，验证 CDP 和 Playwright 连接是否仍然可用
+  // 如果已有浏览器实例，验证 Playwright 连接是否仍然可用
   if (browserInstance && globalCdpUrl) {
-    const isReady = await isCdpReady(globalCdpUrl);
-    if (isReady) {
-      // 还需要验证 Playwright 能否连接
-      try {
-        const browser = await connectBrowser(globalCdpUrl);
-        if (browser.isConnected()) {
-          return {
-            success: true,
-            data: {
-              cdpUrl: globalCdpUrl,
-              pid: browserInstance.pid,
-              message: '浏览器已在运行',
-            },
-          };
-        }
-      } catch {
-        // Playwright 连接失败，需要重启浏览器
+    try {
+      const browser = await connectBrowser(globalCdpUrl);
+      if (browser.isConnected()) {
+        return {
+          success: true,
+          data: {
+            cdpUrl: globalCdpUrl,
+            pid: browserInstance.pid,
+            message: '浏览器已在运行',
+          },
+        };
       }
+    } catch {
+      // 连接失败，需要重启浏览器
     }
-    // CDP 不可用或 Playwright 连接失败，清理旧状态
+    // 连接失败，清理旧状态
     browserInstance = null;
     globalCdpUrl = null;
     await disconnectBrowser();
@@ -467,7 +464,6 @@ async function executeAction(params: BrowserActionParams): Promise<ToolResult> {
   try {
     const cdpUrl = ensureCdpUrl();
     const page = await getPage(cdpUrl, params.targetId);
-    await restoreRoleRefsForTarget({ page, cdpUrl, targetId: params.targetId });
 
     switch (params.action) {
       case 'navigate': {
@@ -615,24 +611,12 @@ async function executeTabs(params: BrowserTabsParams): Promise<ToolResult> {
       case 'list': {
         const pages = await getAllPages(cdpUrl);
         const tabs = await Promise.all(
-          pages.map(async (page, index) => {
-            const session = await page.context().newCDPSession(page);
-            let targetId: string | undefined;
-            try {
-              const info = await session.send('Target.getTargetInfo') as {
-                targetInfo?: { targetId?: string };
-              };
-              targetId = info?.targetInfo?.targetId;
-            } finally {
-              await session.detach().catch(() => {});
-            }
-            return {
-              index,
-              targetId,
-              url: page.url(),
-              title: await page.title(),
-            };
-          })
+          pages.map(async (page, index) => ({
+            index,
+            targetId: await getPageTargetId(page) ?? undefined,
+            url: page.url(),
+            title: await page.title(),
+          }))
         );
         return { success: true, data: { tabs } };
       }

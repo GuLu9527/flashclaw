@@ -4,16 +4,13 @@
  * 追踪每个会话的 token 使用量和状态
  */
 
-import pino from 'pino';
 import { existsSync, readFileSync, statSync } from 'fs';
 import { promises as fs } from 'fs';
 import { join } from 'path';
 import { getFlashClawHome } from './paths.js';
+import { createLogger } from './logger.js';
 
-const logger = pino({
-  level: process.env.LOG_LEVEL || 'info',
-  transport: { target: 'pino-pretty', options: { colorize: true } }
-});
+const logger = createLogger('SessionTracker');
 
 /**
  * 会话统计数据
@@ -116,7 +113,7 @@ export function getOrCreateSession(chatId: string, model?: string): SessionData 
       inputTokens: 0,
       outputTokens: 0,
       totalTokens: 0,
-      model: model || process.env.AI_MODEL || 'claude-4-5-sonnet-20250929',
+      model: model || process.env.AI_MODEL || process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-20250514',
       startedAt: now,
       lastActivityAt: now,
       compactSuggested: false
@@ -176,6 +173,7 @@ export function recordTokenUsage(chatId: string, usage: TokenUsage, model?: stri
 export function getContextWindowSize(model?: string): number {
   // Claude 模型的上下文窗口
   const contextWindows: Record<string, number> = {
+    'claude-sonnet-4-20250514': 200000,
     'claude-4-5-sonnet-20250929': 200000,
     'claude-3-5-sonnet-20241022': 200000,
     'claude-3-opus-20240229': 200000,
@@ -291,7 +289,25 @@ export function cleanupStaleSessions(maxAgeMs: number = 24 * 60 * 60 * 1000): nu
 
 // 初始化：加载缓存并定期清理
 loadSessionsFromDisk();
-const cleanupTimer = setInterval(() => {
+let cleanupTimer: NodeJS.Timeout | null = setInterval(() => {
   cleanupStaleSessions();
 }, 60 * 60 * 1000);
 cleanupTimer.unref?.();
+
+/**
+ * 关闭 session tracker（持久化并清理定时器）
+ * 应在优雅关闭时调用
+ */
+export async function shutdownSessionTracker(): Promise<void> {
+  if (cleanupTimer) {
+    clearInterval(cleanupTimer);
+    cleanupTimer = null;
+  }
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+  // 最后持久化一次
+  await persistSessions();
+  logger.debug('📊 Session tracker 已关闭');
+}

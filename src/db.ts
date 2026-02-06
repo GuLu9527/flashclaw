@@ -88,35 +88,36 @@ export function initDatabase(): void {
     CREATE INDEX IF NOT EXISTS idx_task_run_logs ON task_run_logs(task_id, run_at);
   `);
 
-  // Add sender_name column if it doesn't exist (migration for existing DBs)
-  try {
-    database.exec(`ALTER TABLE messages ADD COLUMN sender_name TEXT`);
-  } catch { /* column already exists */ }
-
-  // Add context_mode column if it doesn't exist (migration for existing DBs)
-  try {
-    database.exec(`ALTER TABLE scheduled_tasks ADD COLUMN context_mode TEXT DEFAULT 'isolated'`);
-  } catch { /* column already exists */ }
-
-  // Add retry_count column (migration for existing DBs)
-  try {
-    database.exec(`ALTER TABLE scheduled_tasks ADD COLUMN retry_count INTEGER DEFAULT 0`);
-  } catch { /* column already exists */ }
-
-  // Add max_retries column (migration for existing DBs)
-  try {
-    database.exec(`ALTER TABLE scheduled_tasks ADD COLUMN max_retries INTEGER DEFAULT 3`);
-  } catch { /* column already exists */ }
-
-  // Add timeout_ms column (migration for existing DBs)
-  try {
-    database.exec(`ALTER TABLE scheduled_tasks ADD COLUMN timeout_ms INTEGER DEFAULT 300000`);
-  } catch { /* column already exists */ }
+  // 数据库迁移：添加缺失的列（已存在则跳过）
+  const migrations: [string, string][] = [
+    ['sender_name', `ALTER TABLE messages ADD COLUMN sender_name TEXT`],
+    ['context_mode', `ALTER TABLE scheduled_tasks ADD COLUMN context_mode TEXT DEFAULT 'isolated'`],
+    ['retry_count', `ALTER TABLE scheduled_tasks ADD COLUMN retry_count INTEGER DEFAULT 0`],
+    ['max_retries', `ALTER TABLE scheduled_tasks ADD COLUMN max_retries INTEGER DEFAULT 3`],
+    ['timeout_ms', `ALTER TABLE scheduled_tasks ADD COLUMN timeout_ms INTEGER DEFAULT 300000`],
+  ];
+  
+  for (const [name, sql] of migrations) {
+    try {
+      database.exec(sql);
+    } catch (err: unknown) {
+      // 列已存在是正常情况（SQLite 不支持 IF NOT EXISTS 语法），其他错误需要记录
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!msg.includes('duplicate column') && !msg.includes('already exists')) {
+        console.warn(`[DB Migration] ${name}: ${msg}`);
+      }
+    }
+  }
 
   // Create composite index for efficient due task queries
   try {
     database.exec(`CREATE INDEX IF NOT EXISTS idx_due_tasks ON scheduled_tasks(status, next_run)`);
-  } catch { /* column already exists */ }
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!msg.includes('already exists')) {
+      console.warn(`[DB Migration] idx_due_tasks: ${msg}`);
+    }
+  }
 }
 
 /**
@@ -231,24 +232,27 @@ export function getMessagesSince(chatJid: string, sinceTimestamp: string, botPre
 }
 
 export function createTask(task: Omit<ScheduledTask, 'last_run' | 'last_result'>): void {
-  getDb().prepare(`
-    INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, next_run, status, created_at, retry_count, max_retries, timeout_ms)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    task.id,
-    task.group_folder,
-    task.chat_jid,
-    task.prompt,
-    task.schedule_type,
-    task.schedule_value,
-    task.context_mode || 'isolated',
-    task.next_run,
-    task.status,
-    task.created_at,
-    task.retry_count ?? 0,
-    task.max_retries ?? 3,
-    task.timeout_ms ?? 300000
-  );
+  const db = getDb();
+  db.transaction(() => {
+    db.prepare(`
+      INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, next_run, status, created_at, retry_count, max_retries, timeout_ms)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      task.id,
+      task.group_folder,
+      task.chat_jid,
+      task.prompt,
+      task.schedule_type,
+      task.schedule_value,
+      task.context_mode || 'isolated',
+      task.next_run,
+      task.status,
+      task.created_at,
+      task.retry_count ?? 0,
+      task.max_retries ?? 3,
+      task.timeout_ms ?? 300000
+    );
+  })();
 }
 
 export function getTaskById(id: string): ScheduledTask | undefined {
@@ -283,11 +287,20 @@ export function updateTask(id: string, updates: Partial<Pick<ScheduledTask, 'pro
 }
 
 export function deleteTask(id: string): void {
-  // Delete child records first (FK constraint)
-  getDb().prepare('DELETE FROM task_run_logs WHERE task_id = ?').run(id);
-  getDb().prepare('DELETE FROM scheduled_tasks WHERE id = ?').run(id);
+  const db = getDb();
+  // 使用事务确保级联删除的原子性
+  db.transaction(() => {
+    db.prepare('DELETE FROM task_run_logs WHERE task_id = ?').run(id);
+    db.prepare('DELETE FROM scheduled_tasks WHERE id = ?').run(id);
+  })();
 }
 
+/**
+ * 获取到期任务
+ * 
+ * 注意：Node.js 单线程 + better-sqlite3 同步 API 天然保证不会有并发读写竞态。
+ * 调度器层面通过 running flag 防止同一任务重复执行（见 task-scheduler.ts）。
+ */
 export function getDueTasks(): ScheduledTask[] {
   const now = new Date().toISOString();
   return getDb().prepare(`

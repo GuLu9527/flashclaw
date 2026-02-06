@@ -6,7 +6,7 @@ export const envSchema = z.object({
   ANTHROPIC_API_KEY: z.string().optional(),
   ANTHROPIC_BASE_URL: z.string().url().optional(),
   ANTHROPIC_AUTH_TOKEN: z.string().optional(),
-  AI_MODEL: z.string().default('claude-4-5-sonnet-20250929'),
+  AI_MODEL: z.string().default('claude-sonnet-4-20250514'),
   
   // 飞书配置
   FEISHU_APP_ID: z.string().optional(),

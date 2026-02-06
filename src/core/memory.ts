@@ -121,6 +121,12 @@ export class MemoryManager {
   /** 压缩摘要缓存：groupId -> 摘要 */
   private summaryCache: Map<string, string> = new Map();
   
+  /** 正在压缩的 groupId 集合（防止并发压缩） */
+  private compactingGroups: Set<string> = new Set();
+  
+  /** 缓存上限 */
+  private static readonly MAX_CACHE_ENTRIES = 200;
+  
   constructor(config: Partial<MemoryConfig> = {}) {
     this.config = {
       contextTokenLimit: config.contextTokenLimit ?? 100000,  // 发送给 AI 的上下文限制 100k tokens
@@ -202,14 +208,20 @@ export class MemoryManager {
     }
     
     const messages = this.shortTermMemory.get(groupId)!;
-    messages.push({ ...message });
+    const newMsg = { ...message };
+    messages.push(newMsg);
     
     // 检查总 token 数，如果超过阈值的 2 倍，移除最旧的消息
-    // 这是一个软限制，真正的压缩在 needsCompaction 中触发
+    // 使用增量计算避免 O(n^2)：先算总量，逐条减去被移除的消息
     const maxStorageTokens = this.config.compactThreshold * 2;
-    while (this.estimateTokens(messages) > maxStorageTokens && messages.length > 10) {
-      messages.shift();
+    let totalTokens = this.estimateTokens(messages);
+    while (totalTokens > maxStorageTokens && messages.length > 10) {
+      const removed = messages.shift()!;
+      totalTokens -= this.estimateMessageTokens(removed);
     }
+    
+    // 清理过大的缓存，防止无限增长
+    this.evictCachesIfNeeded();
   }
   
   /**
@@ -242,6 +254,47 @@ export class MemoryManager {
    */
   getMessageCount(groupId: string): number {
     return this.shortTermMemory.get(groupId)?.length ?? 0;
+  }
+  
+  /**
+   * 清理过大的缓存，防止 Map 无限增长
+   */
+  private evictCachesIfNeeded(): void {
+    const maxEntries = MemoryManager.MAX_CACHE_ENTRIES;
+    
+    // 清理短期记忆中不活跃的群组
+    if (this.shortTermMemory.size > maxEntries) {
+      const toRemove = this.shortTermMemory.size - maxEntries;
+      const keys = this.shortTermMemory.keys();
+      for (let i = 0; i < toRemove; i++) {
+        const key = keys.next().value;
+        if (key !== undefined) {
+          this.shortTermMemory.delete(key);
+          this.summaryCache.delete(key);
+        }
+      }
+      logger.debug({ evicted: toRemove }, '清理不活跃的短期记忆');
+    }
+    
+    // 清理长期记忆缓存
+    if (this.longTermCache.size > maxEntries) {
+      const toRemove = this.longTermCache.size - maxEntries;
+      const keys = this.longTermCache.keys();
+      for (let i = 0; i < toRemove; i++) {
+        const key = keys.next().value;
+        if (key !== undefined) this.longTermCache.delete(key);
+      }
+    }
+    
+    // 清理用户记忆缓存
+    if (this.userMemoryCache.size > maxEntries) {
+      const toRemove = this.userMemoryCache.size - maxEntries;
+      const keys = this.userMemoryCache.keys();
+      for (let i = 0; i < toRemove; i++) {
+        const key = keys.next().value;
+        if (key !== undefined) this.userMemoryCache.delete(key);
+      }
+    }
   }
   
   // ==================== 长期记忆 ====================
@@ -522,6 +575,31 @@ export class MemoryManager {
    * @returns 压缩结果
    */
   async compact(groupId: string, apiClient: ApiClient): Promise<CompactResult> {
+    // 防止并发压缩同一群组
+    if (this.compactingGroups.has(groupId)) {
+      logger.debug({ groupId }, '📦 压缩进行中，跳过重复请求');
+      const messages = this.shortTermMemory.get(groupId) || [];
+      return {
+        originalCount: messages.length,
+        compactedCount: messages.length,
+        summary: '',
+        savedTokens: 0,
+      };
+    }
+    
+    this.compactingGroups.add(groupId);
+    
+    try {
+      return await this.compactInternal(groupId, apiClient);
+    } finally {
+      this.compactingGroups.delete(groupId);
+    }
+  }
+  
+  /**
+   * 内部压缩实现（由 compact 方法调用，受并发锁保护）
+   */
+  private async compactInternal(groupId: string, apiClient: ApiClient): Promise<CompactResult> {
     const messages = this.shortTermMemory.get(groupId) || [];
     const originalCount = messages.length;
     const originalTokens = this.estimateTokens(messages);

@@ -11,7 +11,6 @@
 
 import fs from 'fs';
 import path from 'path';
-import pino from 'pino';
 import type Anthropic from '@anthropic-ai/sdk';
 import {
   AGENT_TIMEOUT,
@@ -25,11 +24,9 @@ import { MemoryManager, getMemoryManager as getGlobalMemoryManager } from './cor
 import { pluginManager } from './plugins/manager.js';
 import { ToolContext, ToolResult as PluginToolResult } from './plugins/types.js';
 import { recordTokenUsage, checkCompactThreshold } from './session-tracker.js';
+import { createLogger } from './logger.js';
 
-const logger = pino({
-  level: process.env.LOG_LEVEL || 'info',
-  transport: { target: 'pino-pretty', options: { colorize: true } }
-});
+const logger = createLogger('AgentRunner');
 
 /**
  * 图片附件

@@ -16,6 +16,10 @@ dotenv.config();
 // Bot name for display in messages (customizable via .env)
 export const BOT_NAME = process.env.BOT_NAME || 'FlashClaw';
 
+// ==================== AI Model ====================
+/** 默认 AI 模型（所有文件统一使用此常量，避免不一致） */
+export const DEFAULT_AI_MODEL = process.env.AI_MODEL || process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-20250514';
+
 // ==================== Polling Intervals ====================
 export const SCHEDULER_POLL_INTERVAL = 60000;
 export const IPC_POLL_INTERVAL = 1000;

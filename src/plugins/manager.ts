@@ -78,6 +78,15 @@ export class PluginManager {
         logger.error({ plugin: name, err }, '停止渠道插件失败');
       }
     }
+    
+    // 如果是工具插件且有 cleanup 钩子，调用它
+    if (isToolPlugin(entry.plugin) && entry.plugin.cleanup) {
+      try {
+        await entry.plugin.cleanup();
+      } catch (err) {
+        logger.error({ plugin: name, err }, '清理工具插件失败');
+      }
+    }
 
     this.plugins.delete(name);
     logger.info({ plugin: name }, '⚡ 已卸载插件');
@@ -187,10 +196,17 @@ export class PluginManager {
    * 清空所有插件
    */
   async clear(): Promise<void> {
-    // 先停止所有渠道
+    // 先停止所有渠道插件，清理所有工具插件
     for (const entry of this.plugins.values()) {
       if (isChannelPlugin(entry.plugin)) {
-        await entry.plugin.stop().catch(() => {});
+        await entry.plugin.stop().catch((err) => {
+          logger.warn({ plugin: entry.plugin.name, err }, '停止渠道插件失败（清空时）');
+        });
+      }
+      if (isToolPlugin(entry.plugin) && entry.plugin.cleanup) {
+        await entry.plugin.cleanup().catch((err) => {
+          logger.warn({ plugin: entry.plugin.name, err }, '清理工具插件失败（清空时）');
+        });
       }
     }
 
