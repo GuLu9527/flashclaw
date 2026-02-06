@@ -4,6 +4,28 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，
 并遵循 [语义化版本](https://semver.org/spec/v2.0.0.html)。
 
+## [1.3.0] - 2026-02-06
+
+### 修复
+- memory.ts: 修复并发压缩竞态条件，添加 compactingGroups 锁
+- memory.ts: 修复 addMessage O(n^2) 性能问题，改为增量 token 计算
+- memory.ts: 添加缓存上限清理 (MAX_CACHE_ENTRIES=200)，防止 Map 无限增长
+- db.ts: 为 createTask/deleteTask 添加事务保护
+- db.ts: 改进数据库迁移错误处理，区分"列已存在"和真正的错误
+- api-client.ts: 为工具调用递归添加深度限制 (MAX_TOOL_CALL_DEPTH=20)
+- index.ts: IPC 轮询添加并发保护，防止处理时间超过间隔导致重复执行
+- message-queue.ts: 修复 processNext 竞态条件，processing.add 提前到 await 之前
+- message-queue.ts: 添加 seenMessages 硬上限 (10k)，防止高负载下无限增长
+- session-tracker.ts: 修复 cleanupTimer 在关闭时未清理的内存泄漏
+- 统一所有文件中默认模型名称为 claude-sonnet-4-20250514（消除 6 处不一致）
+- index.ts: 使用 DEFAULT_AI_MODEL 常量替代硬编码模型名
+
+### 改进
+- 统一日志: agent-runner/message-queue/session-tracker 改用 createLogger() 工厂
+- 插件管理器: unregister()/clear() 现在正确调用工具插件的 cleanup() 钩子
+- session-tracker: 新增 shutdownSessionTracker() 用于优雅关闭
+- package.json: playwright-core/cheerio/html-to-text/turndown 移至 optionalDependencies
+
 ## [1.2.0] - 2026-02-06
 
 ### 新增
