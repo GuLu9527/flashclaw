@@ -1,0 +1,27 @@
+{
+  "name": "telegram",
+  "version": "1.0.0",
+  "type": "channel",
+  "description": "Telegram 通讯渠道插件 - 基于 grammy，支持私聊/群聊/图片/代理",
+  "author": "FlashClaw",
+  "main": "index.ts",
+  "dependencies": [],
+  "config": {
+    "botToken": {
+      "type": "string",
+      "required": true,
+      "env": "TELEGRAM_BOT_TOKEN"
+    },
+    "proxy": {
+      "type": "string",
+      "required": false,
+      "env": "TELEGRAM_PROXY"
+    },
+    "allowedUsers": {
+      "type": "string",
+      "required": false,
+      "env": "TELEGRAM_ALLOWED_USERS",
+      "description": "允许使用 Bot 的用户 ID，多个用逗号分隔，不设置则所有人可用"
+    }
+  }
+}

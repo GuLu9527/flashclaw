@@ -3,9 +3,16 @@
  * ⚡ 闪电龙虾 - 快如闪电的 AI 助手
  */
 
-import 'dotenv/config';
+import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
+import { homedir } from 'os';
+
+// 加载环境变量：先加载用户目录 ~/.flashclaw/.env，再加载项目根目录 .env
+// 后加载的不会覆盖已有值，所以用户目录配置优先
+const flashclawHome = process.env.FLASHCLAW_HOME || path.join(homedir(), '.flashclaw');
+dotenv.config({ path: path.join(flashclawHome, '.env') });
+dotenv.config(); // 项目根目录 .env
 import { isIP } from 'net';
 import pino from 'pino';
 import { z } from 'zod';
@@ -596,7 +603,8 @@ async function processQueuedMessage(queuedMsg: QueuedMessage<Message>): Promise<
   try {
     const response = await executeAgent(group, prompt, chatId, {
       attachments: imageAttachments.length > 0 ? imageAttachments : undefined,
-      userId: msg.senderId  // 传递用户 ID 用于用户级别记忆
+      userId: msg.senderId,  // 传递用户 ID 用于用户级别记忆
+      platform: msg.platform
     });
     thinkingDone = true;
     
@@ -847,7 +855,7 @@ async function handleIncomingMessage(msg: Message): Promise<void> {
             group,
             '请用 2-3 句话总结我们之前的对话要点，以便我们继续对话时能快速回顾。只输出总结，不要其他内容。',
             chatId,
-            { userId: msg.senderId }
+            { userId: msg.senderId, platform: msg.platform }
           );
           
           // 重置会话和 tracker
@@ -904,6 +912,7 @@ async function handleIncomingMessage(msg: Message): Promise<void> {
 interface ExecuteAgentOptions {
   attachments?: { type: 'image'; content: string; mimeType?: string }[];
   userId?: string;  // 用户 ID，用于用户级别记忆
+  platform?: string;  // 消息来源平台
 }
 
 async function executeAgent(group: RegisteredGroup, prompt: string, chatId: string, options?: ExecuteAgentOptions): Promise<string | null> {
@@ -934,6 +943,7 @@ async function executeAgent(group: RegisteredGroup, prompt: string, chatId: stri
       chatJid: chatId,
       isMain,
       userId: options?.userId || chatId,  // 用户级别记忆
+      platform: options?.platform,
       attachments: options?.attachments
     });
 
@@ -1043,8 +1053,8 @@ function startIpcWatcher(): void {
                 }
                 const targetGroup = registeredGroups[data.chatJid];
                 if (isMain || (targetGroup && targetGroup.folder === sourceGroup)) {
-                  await sendMessage(data.chatJid, `${BOT_NAME}: ${data.text}`);
-                  logger.info({ chatId: data.chatJid, sourceGroup }, 'IPC 消息已发送');
+                  await sendMessage(data.chatJid, `${BOT_NAME}: ${data.text}`, data.platform);
+                  logger.info({ chatId: data.chatJid, sourceGroup, platform: data.platform }, 'IPC 消息已发送');
                 } else {
                   logger.warn({ chatId: data.chatJid, sourceGroup }, '未授权的 IPC 消息被阻止');
                 }
@@ -1063,8 +1073,8 @@ function startIpcWatcher(): void {
                 const targetGroup = registeredGroups[data.chatJid];
                 if (isMain || (targetGroup && targetGroup.folder === sourceGroup)) {
                   const caption = data.caption ? `${BOT_NAME}: ${data.caption}` : undefined;
-                  await channelManager.sendImage(data.chatJid, data.imageData, caption);
-                  logger.info({ chatId: data.chatJid, sourceGroup }, 'IPC 图片已发送');
+                  await channelManager.sendImage(data.chatJid, data.imageData, caption, data.platform);
+                  logger.info({ chatId: data.chatJid, sourceGroup, platform: data.platform }, 'IPC 图片已发送');
                 } else {
                   logger.warn({ chatId: data.chatJid, sourceGroup }, '未授权的 IPC 图片被阻止');
                 }
@@ -1404,15 +1414,15 @@ ${envExists
   ███████╗██║  ██║██║  ██║╚██████╔╝██║  ██║
   ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝
 \x1b[0m
-  \x1b[31m✗ 缺少消息平台配置\x1b[0m
+  \x1b[31m✗ 没有可用的消息渠道\x1b[0m
 
-  请在 \x1b[33m.env\x1b[0m 中配置飞书:
+  需要至少启用一个渠道插件，请检查:
+  1. 渠道插件是否已安装并启用
+  2. 对应的环境变量是否已在 \x1b[33m.env\x1b[0m 中配置
 
-  \x1b[36m飞书:\x1b[0m
-    FEISHU_APP_ID=cli_xxxxx
-    FEISHU_APP_SECRET=xxxxx
-
-  详见 \x1b[33m.env.example\x1b[0m
+  \x1b[33mflashclaw init\x1b[0m                    交互式配置
+  \x1b[33mflashclaw plugins list --available\x1b[0m  查看可安装的渠道插件
+  \x1b[33mflashclaw doctor\x1b[0m                   诊断配置问题
 `);
     process.exit(1);
   }

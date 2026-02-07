@@ -266,6 +266,57 @@ async function listAvailablePlugins(): Promise<void> {
   }
 }
 
+/**
+ * 插件安装后，读取其 plugin.json 的 config 字段
+ * 通用地提示用户需要配置哪些环境变量
+ */
+function printChannelPluginHint(pluginName: string): void {
+  try {
+    const { existsSync, readFileSync } = require('fs');
+    const { join } = require('path');
+
+    // 查找刚安装到用户插件目录的 plugin.json
+    const homedir = process.env.FLASHCLAW_HOME || join(require('os').homedir(), '.flashclaw');
+    const manifestPath = join(homedir, 'plugins', pluginName, 'plugin.json');
+    if (!existsSync(manifestPath)) return;
+
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+    if (!manifest.config) return;
+
+    const missing: string[] = [];
+    const optional: string[] = [];
+
+    for (const [, cfg] of Object.entries(manifest.config)) {
+      const envName = (cfg as any)?.env;
+      if (!envName) continue;
+
+      if (process.env[envName]) continue; // 已配置，跳过
+
+      if ((cfg as any)?.required) {
+        missing.push(envName);
+      } else {
+        optional.push(envName);
+      }
+    }
+
+    if (missing.length === 0 && optional.length === 0) return;
+
+    if (missing.length > 0) {
+      console.log(`\n${yellow('⚠')} 还需要配置环境变量（在 ~/.flashclaw/.env 中添加）:`);
+      for (const v of missing) {
+        console.log(`  ${cyan(v)}=你的值`);
+      }
+    }
+    if (optional.length > 0) {
+      for (const v of optional) {
+        console.log(`  ${dim(`${v}=  # 可选`)}`);
+      }
+    }
+  } catch {
+    // 读取失败不影响安装流程
+  }
+}
+
 async function installPlugin(name: string): Promise<void> {
   const installer = await loadPluginInstaller();
   
@@ -286,6 +337,8 @@ async function installPlugin(name: string): Promise<void> {
     const success = await installer.installPlugin(name);
     if (success) {
       console.log(green('✓') + ` 插件 ${bold(name)} 安装成功`);
+      // 渠道插件提示配置环境变量
+      printChannelPluginHint(name);
       console.log(`\n使用 ${cyan('flashclaw start')} 重启服务以加载新插件`);
     } else {
       console.log(red('✗') + ` 安装失败`);

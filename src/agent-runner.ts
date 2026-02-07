@@ -47,6 +47,8 @@ export interface AgentInput {
   isScheduledTask?: boolean;
   /** 用户 ID，用于用户级别记忆 */
   userId?: string;
+  /** 消息来源平台（telegram / feishu 等） */
+  platform?: string;
   /** 图片附件列表 */
   attachments?: ImageAttachment[];
   /** 流式输出回调（可选） */
@@ -70,6 +72,7 @@ interface IpcContext {
   groupFolder: string;
   isMain: boolean;
   userId: string;
+  platform?: string;
 }
 
 /**
@@ -117,7 +120,7 @@ export function getAllTools(): ToolSchema[] {
  * 完全依赖插件工具
  */
 export function createToolExecutor(ctx: IpcContext, memoryManager: MemoryManager) {
-  const { chatJid, groupFolder, userId } = ctx;
+  const { chatJid, groupFolder, userId, platform } = ctx;
   const IPC_DIR = getIpcDir(groupFolder);
   const MESSAGES_DIR = path.join(IPC_DIR, 'messages');
 
@@ -133,6 +136,7 @@ export function createToolExecutor(ctx: IpcContext, memoryManager: MemoryManager
         chatJid,
         text: content,
         groupFolder,
+        platform,
         timestamp: new Date().toISOString()
       };
       writeIpcFile(MESSAGES_DIR, data);
@@ -145,6 +149,7 @@ export function createToolExecutor(ctx: IpcContext, memoryManager: MemoryManager
         imageData,
         caption,
         groupFolder,
+        platform,
         timestamp: new Date().toISOString()
       };
       writeIpcFile(MESSAGES_DIR, data);
@@ -448,7 +453,8 @@ async function runAgentOnce(
       chatJid: input.chatJid,
       groupFolder: group.folder,
       isMain: input.isMain,
-      userId: input.userId || input.chatJid  // 使用 userId，如果没有则使用 chatJid
+      userId: input.userId || input.chatJid,  // 使用 userId，如果没有则使用 chatJid
+      platform: input.platform
     },
     memoryManager
   );

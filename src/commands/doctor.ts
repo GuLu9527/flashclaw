@@ -70,6 +70,10 @@ export async function doctorCommand(): Promise<void> {
   // 9. 飞书配置
   results.push(checkFeishuConfig());
 
+  // 10. 用户插件配置检查（通用：读取 plugin.json 的 config 字段）
+  const userPluginResults = await checkUserPluginConfigs(paths.userPlugins());
+  results.push(...userPluginResults);
+
   // 输出所有结果
   console.log('');
   for (const r of results) {
@@ -246,4 +250,69 @@ function checkFeishuConfig(): CheckResult {
     return { status: 'ok', label: '飞书配置', detail: `App ID: ${appId.slice(0, 8)}...` };
   }
   return { status: 'warn', label: '飞书配置', detail: '未配置 (可选)' };
+}
+
+/**
+ * 通用：检查用户已安装插件的环境变量配置
+ * 读取每个插件的 plugin.json config 字段，检查 required env 是否已设置
+ */
+async function checkUserPluginConfigs(userPluginsDir: string): Promise<CheckResult[]> {
+  const results: CheckResult[] = [];
+
+  if (!existsSync(userPluginsDir)) return results;
+
+  try {
+    const { readdirSync, readFileSync } = await import('fs');
+    const { join } = await import('path');
+    const entries = readdirSync(userPluginsDir, { withFileTypes: true });
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const manifestPath = join(userPluginsDir, entry.name, 'plugin.json');
+      if (!existsSync(manifestPath)) continue;
+
+      try {
+        const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+        if (!manifest.config) continue;
+
+        // 检查所有 required 的 env 变量
+        const missingEnvs: string[] = [];
+        const configuredEnvs: string[] = [];
+
+        for (const [key, cfg] of Object.entries(manifest.config)) {
+          const envName = (cfg as any)?.env;
+          const required = (cfg as any)?.required;
+          if (!envName) continue;
+
+          if (process.env[envName]) {
+            configuredEnvs.push(envName);
+          } else if (required) {
+            missingEnvs.push(envName);
+          }
+        }
+
+        const label = `插件 ${manifest.name || entry.name}`;
+
+        if (missingEnvs.length > 0) {
+          results.push({
+            status: 'warn',
+            label,
+            detail: `缺少环境变量: ${missingEnvs.join(', ')}`,
+          });
+        } else if (configuredEnvs.length > 0) {
+          results.push({
+            status: 'ok',
+            label,
+            detail: `已配置 (${configuredEnvs.length} 个环境变量)`,
+          });
+        }
+      } catch {
+        // 单个插件解析失败跳过
+      }
+    }
+  } catch {
+    // 目录读取失败跳过
+  }
+
+  return results;
 }

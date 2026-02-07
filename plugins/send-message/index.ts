@@ -90,8 +90,9 @@ const plugin: ToolPlugin = {
       if (hasImage) {
         let imageData = image;
         
-        // 处理特殊引用：latest_screenshot
-        if (image === 'latest_screenshot') {
+        // 处理特殊引用：latest_screenshot 或文件名含 _screenshot 的值
+        // AI 有时会传文件名如 "baidu_screenshot.png" 而非 "latest_screenshot"
+        if (image === 'latest_screenshot' || /^[\w-]*_?screenshot[\w.]*$/i.test(image)) {
           const screenshot = getLatestScreenshot();
           if (screenshot) {
             imageData = `data:image/png;base64,${screenshot}`;
@@ -102,8 +103,18 @@ const plugin: ToolPlugin = {
             };
           }
         } else if (!image.startsWith('data:')) {
-          // 处理图片格式：如果是纯 base64，转换为 data URL
-          imageData = `data:image/png;base64,${image}`;
+          // 尝试作为文件路径读取
+          try {
+            if (existsSync(image)) {
+              const fileBuffer = readFileSync(image);
+              imageData = `data:image/png;base64,${fileBuffer.toString('base64')}`;
+            } else {
+              // 假设是纯 base64，转换为 data URL
+              imageData = `data:image/png;base64,${image}`;
+            }
+          } catch {
+            imageData = `data:image/png;base64,${image}`;
+          }
         }
         
         await context.sendImage(imageData, caption);

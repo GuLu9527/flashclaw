@@ -31,3 +31,8 @@ TODO.md
 
 # Package artifacts
 *.tgz
+
+# Browser plugin temp files
+*_screenshot.png
+browser_screenshot.png
+latest_screenshot

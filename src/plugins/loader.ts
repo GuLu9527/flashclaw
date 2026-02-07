@@ -116,6 +116,29 @@ async function getPluginHash(pluginPath: string): Promise<string> {
 }
 
 /**
+ * 确保用户插件目录的 src 链接存在
+ * 社区插件使用 ../../src/ 相对路径引用核心模块
+ * 内置插件目录（plugins/）天然满足，用户目录（~/.flashclaw/plugins/）需要创建链接
+ */
+async function ensureSrcLink(pluginsDir: string): Promise<void> {
+  const appSrc = resolve(appRoot, 'src');
+  // 用户插件目录的 ../../src = ~/.flashclaw/src
+  const targetSrc = resolve(pluginsDir, '..', 'src');
+
+  // 如果已指向正确位置，或就是内置目录，跳过
+  if (resolve(targetSrc) === resolve(appSrc)) return;
+  if (existsSync(targetSrc)) return;
+
+  try {
+    // Windows 使用 junction（无需管理员权限），Unix 使用 symlink
+    await fs.symlink(appSrc, targetSrc, 'junction');
+    logger.debug({ link: targetSrc, target: appSrc }, '已创建 src 链接');
+  } catch {
+    logger.warn({ link: targetSrc }, '创建 src 链接失败，部分社区插件可能无法加载');
+  }
+}
+
+/**
  * 从目录加载所有插件（按依赖顺序）
  * @param pluginsDir 插件目录路径
  * @returns 加载成功的插件名称列表
@@ -131,6 +154,9 @@ export async function loadFromDir(pluginsDir: string): Promise<string[]> {
     logger.warn({ dir }, '插件目录不存在');
     return loaded;
   }
+
+  // 确保用户插件目录的 src 引用可解析
+  await ensureSrcLink(dir);
 
   // 读取目录内容
   const entries = await fs.readdir(dir, { withFileTypes: true });
@@ -262,6 +288,19 @@ export async function loadPlugin(pluginPath: string): Promise<string | null> {
   if (relativeMain.startsWith('..') || isAbsolute(relativeMain)) {
     logger.error({ plugin: manifest.name, main: manifest.main }, '插件入口文件路径不安全');
     return null;
+  }
+
+  // 如果插件有自己的 node_modules，加入模块解析路径
+  const pluginNodeModules = join(absPath, 'node_modules');
+  if (existsSync(pluginNodeModules)) {
+    const existing = process.env.NODE_PATH ? process.env.NODE_PATH.split(delimiter) : [];
+    if (!existing.includes(pluginNodeModules)) {
+      process.env.NODE_PATH = existing.length > 0
+        ? `${process.env.NODE_PATH}${delimiter}${pluginNodeModules}`
+        : pluginNodeModules;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (Module as any)._initPaths?.();
+    }
   }
   
   let pluginModule: { default?: Plugin; create?: () => Plugin };

@@ -1,0 +1,10 @@
+{
+  "name": "@flashclaw/plugin-telegram",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Telegram 通讯渠道插件 - 基于 grammy，支持私聊/群聊/图片/代理",
+  "dependencies": {
+    "grammy": "^1.35.0",
+    "@grammyjs/runner": "^2.0.3"
+  }
+}

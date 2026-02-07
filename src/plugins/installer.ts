@@ -818,6 +818,44 @@ async function downloadOfficialPlugin(
 }
 
 /**
+ * 安装插件自身的 npm 依赖
+ * 检测插件目录是否有 package.json，如果有则执行 npm install --production
+ */
+async function installPluginDeps(pluginDir: string, pluginName: string): Promise<void> {
+  const pkgJsonPath = join(pluginDir, 'package.json');
+  if (!existsSync(pkgJsonPath)) return;
+
+  try {
+    const pkgJson = JSON.parse(await fs.readFile(pkgJsonPath, 'utf-8'));
+    const deps = pkgJson.dependencies;
+    if (!deps || Object.keys(deps).length === 0) return;
+
+    log.step(`安装插件 "${pluginName}" 的 npm 依赖...`);
+
+    const isWin = platform() === 'win32';
+    const { stderr } = await execFileAsync(
+      isWin ? 'npm.cmd' : 'npm',
+      ['install', '--omit=dev', '--no-fund', '--no-audit'],
+      {
+        cwd: pluginDir,
+        timeout: 120_000,
+        windowsHide: true,
+        shell: isWin,  // Windows 需要 shell 来执行 .cmd 文件
+        env: { ...process.env, NODE_ENV: 'production' },
+      }
+    );
+
+    if (stderr && !stderr.includes('npm warn') && !stderr.includes('npm WARN')) {
+      log.warn(`npm install 输出: ${stderr.trim()}`);
+    }
+
+    log.success(`依赖安装完成`);
+  } catch (err) {
+    log.warn(`插件依赖安装失败（插件可能无法正常工作）: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/**
  * 安装插件
  * 直接从 community-plugins 目录下载，无需预先检查注册表
  * 
@@ -871,6 +909,9 @@ export async function installPlugin(name: string): Promise<boolean> {
       await fs.rm(targetDir, { recursive: true, force: true });
       return false;
     }
+
+    // 安装插件的 npm 依赖（如果有 package.json）
+    await installPluginDeps(targetDir, name);
 
     // 保存安装元数据
     const meta = await readInstalledMeta();
