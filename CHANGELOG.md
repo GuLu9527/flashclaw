@@ -4,6 +4,22 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，
 并遵循 [语义化版本](https://semver.org/spec/v2.0.0.html)。
 
+## [1.5.0] - 2026-02-07
+
+### 新增
+- `flashclaw security` 安全审计命令（检查 API Key、.env 文件、数据目录、代理、日志、插件等 7 类安全项）
+- `flashclaw daemon` 后台服务管理命令（install/uninstall/status/start/stop，Windows 计划任务实现开机自启）
+- SOUL.md 人格设定系统（全局 `~/.flashclaw/SOUL.md` + 会话级覆盖，`flashclaw init` 支持交互式设置）
+- 上下文窗口保护（`context-guard.ts`）：自动检测 token 使用量，空间紧张时自动压缩，空间不足时拒绝请求
+- 环境变量 `CONTEXT_WINDOW_SIZE` 覆盖模型上下文窗口大小（适配未知模型）
+- 环境变量 `CONTEXT_MIN_TOKENS` / `CONTEXT_WARN_TOKENS` 调整保护阈值
+### 改进
+- api-client: 工具结果超过 4000 字符自动截断，节省 token
+- api-client: 超过 2 轮工具调用时，旧轮次自动压缩为摘要（保留最近 2 轮完整）
+- model-capabilities: MiniMax 系列上下文窗口更新为 200K
+- model-capabilities: 未知模型默认上下文窗口改为 200K（原 32K）
+- init 命令新增人格设定步骤（Step 6）
+
 ## [1.4.0] - 2026-02-07
 
 ### 新增

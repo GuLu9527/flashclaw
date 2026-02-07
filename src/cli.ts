@@ -97,6 +97,8 @@ ${bold('命令:')}
   ${cyan('init')}                         交互式初始化配置
   ${cyan('init --non-interactive')}      非交互式初始化（需 --api-key）
   ${cyan('doctor')}                      检查运行环境
+  ${cyan('security')}                    安全审计
+  ${cyan('daemon <action>')}             后台服务管理 (install|uninstall|status|start|stop)
   ${cyan('config list-backups')}         列出配置备份
   ${cyan('config restore [n]')}          恢复配置备份（n=1-5，默认1）
   ${cyan('version')}                     显示版本
@@ -106,6 +108,9 @@ ${bold('示例:')}
   flashclaw                     启动服务（默认）
   flashclaw init                首次配置
   flashclaw doctor              环境诊断
+  flashclaw security            安全审计
+  flashclaw daemon install      安装为后台服务（开机自启）
+  flashclaw daemon status       查看后台服务状态
   flashclaw start               启动服务
   flashclaw plugins list        查看已安装插件
   flashclaw plugins install feishu  安装飞书插件
@@ -521,6 +526,19 @@ async function main(): Promise<void> {
     case 'doctor': {
       const { doctorCommand } = await import('./commands/doctor.js');
       await doctorCommand();
+      break;
+    }
+
+    case 'security': {
+      const { securityAuditCommand } = await import('./commands/security.js');
+      await securityAuditCommand();
+      break;
+    }
+
+    case 'daemon': {
+      const action = subcommand || '';
+      const { daemonCommand } = await import('./commands/daemon.js');
+      await daemonCommand(action);
       break;
     }
       

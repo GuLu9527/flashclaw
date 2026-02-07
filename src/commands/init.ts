@@ -185,7 +185,29 @@ async function runInteractive(
     process.exit(0);
   }
 
-  // Step 6: 飞书配置（可选）
+  // Step 6: AI 人格设定（可选）
+  const configSoul = await prompts.confirm({
+    message: '是否设置 AI 人格？(让 Bot 有独特的性格和语调)',
+    initialValue: false,
+  });
+
+  if (!prompts.isCancel(configSoul) && configSoul) {
+    const soulContent = await prompts.text({
+      message: '描述你希望 AI 拥有的人格（直接输入，或稍后编辑 SOUL.md）',
+      placeholder: '例如：你是一只幽默的龙虾，说话简短有力，偶尔用海洋相关的比喻',
+    });
+
+    if (!prompts.isCancel(soulContent) && soulContent && (soulContent as string).trim()) {
+      const { mkdirSync } = await import('fs');
+      const soulPath = join(paths.home(), 'SOUL.md');
+      mkdirSync(dirname(soulPath), { recursive: true });
+      writeFileSync(soulPath, (soulContent as string).trim() + '\n', 'utf-8');
+      prompts.log.success(`人格设定已保存到 ${dim(soulPath)}`);
+      prompts.log.info(`提示: 可随时编辑该文件修改人格，删除文件则恢复默认`);
+    }
+  }
+
+  // Step 7: 飞书配置（可选）
   let feishuAppId = '';
   let feishuAppSecret = '';
 
@@ -209,7 +231,7 @@ async function runInteractive(
     if (!prompts.isCancel(appSecret)) feishuAppSecret = appSecret;
   }
 
-  // Step 7: 生成配置文件
+  // Step 8: 生成配置文件
   s.start('写入配置文件...');
 
   const envContent = buildEnvContent({
@@ -224,7 +246,7 @@ async function runInteractive(
   writeFileSync(envPath, envContent, 'utf-8');
   s.stop(`配置文件已保存到 ${dim(envPath)}`);
 
-  // Step 8: 验证 API 连通性
+  // Step 9: 验证 API 连通性
   s.start('验证 API 连通性...');
   const ok = await testApiConnection(
     apiKey as string,

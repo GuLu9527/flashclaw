@@ -164,8 +164,10 @@ pagesRoutes.get('/chat', async (c) => {
     <div style="margin-top: 1rem; text-align: center;">
       <button class="outline secondary small" onclick="clearChat()">清空对话</button>
     </div>
-    
+
+    <!-- Three.js + 吉祥物脚本（延迟加载） -->
     <script>
+      // ========== 聊天逻辑 ==========
       const messagesContainer = document.getElementById('chat-messages');
       const chatInput = document.getElementById('chat-input');
       const sendBtn = document.getElementById('send-btn');
@@ -205,7 +207,7 @@ pagesRoutes.get('/chat', async (c) => {
         const contentEl = document.createElement('div');
         contentEl.className = 'content';
         contentEl.textContent = content || '';
-        
+
         const time = document.createElement('div');
         time.className = 'time';
         time.textContent = new Date().toLocaleTimeString('zh-CN');

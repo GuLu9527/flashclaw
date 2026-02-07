@@ -48,6 +48,12 @@ flashclaw doctor
 | `flashclaw start` | 启动服务 |
 | `flashclaw init` | 交互式初始化配置 |
 | `flashclaw doctor` | 检查运行环境 |
+| `flashclaw security` | 安全审计（检查配置和环境安全隐患） |
+| `flashclaw daemon install` | 安装为后台服务（开机自启，Windows） |
+| `flashclaw daemon uninstall` | 卸载后台服务 |
+| `flashclaw daemon status` | 查看后台服务状态 |
+| `flashclaw daemon start` | 手动启动后台进程 |
+| `flashclaw daemon stop` | 停止后台进程 |
 | `flashclaw version` | 显示版本 |
 | `flashclaw -v` / `flashclaw --version` | 显示版本（快捷方式） |
 | `flashclaw help` | 显示帮助 |
@@ -179,7 +185,9 @@ flashclaw/
 │   ├── cli.ts               # 命令行接口
 │   ├── commands/            # CLI 子命令
 │   │   ├── init.ts          # 交互式初始化向导
-│   │   └── doctor.ts        # 环境诊断
+│   │   ├── doctor.ts        # 环境诊断
+│   │   ├── security.ts      # 安全审计
+│   │   └── daemon.ts        # 后台服务管理
 │   ├── commands.ts          # 聊天命令处理
 │   ├── session-tracker.ts   # Token 用量追踪
 │   ├── paths.ts             # 路径管理
@@ -189,7 +197,8 @@ flashclaw/
 │   ├── core/                # 核心模块
 │   │   ├── api-client.ts    # AI API 客户端
 │   │   ├── memory.ts        # 记忆管理
-│   │   └── model-capabilities.ts  # 模型能力检测
+│   │   ├── model-capabilities.ts  # 模型能力检测
+│   │   └── context-guard.ts # 上下文窗口保护
 │   └── plugins/             # 插件系统
 │       ├── manager.ts       # 插件管理器
 │       ├── loader.ts        # 插件加载器
@@ -226,6 +235,35 @@ flashclaw/
 | web-ui | Web 管理界面，实时监控与管理（端口 3000）|
 
 ## 功能特性
+
+### AI 人格设定（SOUL.md）
+
+FlashClaw 支持通过 `SOUL.md` 文件自定义 AI 的人格和语调：
+
+- **全局人格**：`~/.flashclaw/SOUL.md` — 所有会话共享
+- **会话级人格**：`~/.flashclaw/groups/{群组}/SOUL.md` — 覆盖全局设定
+
+```
+# 示例 SOUL.md
+你是一只幽默的龙虾，说话简短有力，偶尔用海洋相关的比喻。
+```
+
+可通过 `flashclaw init` 交互式设置，也可直接编辑文件。
+
+### 上下文窗口保护
+
+自动检测对话长度，防止超出模型上下文窗口限制：
+
+- **自动压缩**：上下文使用量接近上限时自动触发压缩
+- **安全拒绝**：剩余空间严重不足时拒绝请求并提示执行 `/compact`
+- **工具结果优化**：工具返回结果超过 4000 字符自动截断，旧的工具调用轮次自动压缩为摘要
+
+可通过环境变量调整阈值：
+```bash
+CONTEXT_WINDOW_SIZE=200000     # 覆盖内置模型上下文窗口大小
+CONTEXT_MIN_TOKENS=16000       # 剩余 token 低于此值拒绝运行
+CONTEXT_WARN_TOKENS=32000      # 剩余 token 低于此值自动压缩
+```
 
 ### 智能响应
 
@@ -318,7 +356,7 @@ AI：你喜欢吃苹果  ← 跨会话记忆生效
 | 平台 | 状态 | 连接方式 |
 |------|------|----------|
 | 飞书 | ✅ 完整支持 | WebSocket 长连接 |
-| Telegram | 📋 计划中 | - |
+| Telegram | ✅ 完整支持 | 长轮询（无需公网服务器） |
 | Slack | 📋 计划中 | - |
 | Discord | 📋 计划中 | - |
 

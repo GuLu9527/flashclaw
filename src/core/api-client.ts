@@ -439,10 +439,99 @@ export class ApiClient {
   
   /** 最大工具调用递归深度，防止无限递归导致栈溢出 */
   private static readonly MAX_TOOL_CALL_DEPTH = 20;
+  /** 工具结果最大字符数，超出截断（节省 token） */
+  private static readonly MAX_TOOL_RESULT_CHARS = 4000;
+  /** 保留最近 N 轮完整工具结果，更早的压缩为摘要 */
+  private static readonly KEEP_RECENT_TOOL_ROUNDS = 2;
+
+  /**
+   * 截断工具结果，超出限制的添加截断标记
+   */
+  private static truncateToolResult(content: string, maxChars: number): string {
+    if (content.length <= maxChars) return content;
+    return content.slice(0, maxChars) + `\n...(内容已截断，原始 ${content.length} 字符)`;
+  }
+
+  /**
+   * 压缩旧的工具调用轮次，只保留最近 N 轮完整结果
+   * 更早的 tool_use/tool_result 对替换为简短摘要，大幅节省 token
+   */
+  private static compressToolHistory(
+    messages: Anthropic.MessageParam[],
+    keepRecentRounds: number,
+  ): Anthropic.MessageParam[] {
+    // 找出所有包含 tool_use 的 assistant 消息的索引
+    const toolRoundIndices: number[] = [];
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i];
+      if (msg.role === 'assistant' && Array.isArray(msg.content)) {
+        const hasToolUse = (msg.content as Anthropic.ContentBlock[]).some(
+          (b) => b.type === 'tool_use'
+        );
+        if (hasToolUse) toolRoundIndices.push(i);
+      }
+    }
+
+    // 不足以压缩，直接返回
+    if (toolRoundIndices.length <= keepRecentRounds) return messages;
+
+    // 需要压缩的轮次（保留最近 N 轮）
+    const compressCount = toolRoundIndices.length - keepRecentRounds;
+    const toCompress = new Set(toolRoundIndices.slice(0, compressCount));
+
+    const result: Anthropic.MessageParam[] = [];
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i];
+
+      if (toCompress.has(i) && msg.role === 'assistant' && Array.isArray(msg.content)) {
+        // 压缩整个工具调用轮次为纯文本摘要
+        // 必须完全去除 tool_use/tool_result 块，否则 API 校验 id 配对会报错
+        const summaryParts: string[] = [];
+        for (const block of msg.content as Anthropic.ContentBlock[]) {
+          if (block.type === 'tool_use') {
+            const inputStr = JSON.stringify(block.input);
+            const inputPreview = inputStr.length > 80 ? inputStr.slice(0, 80) + '...' : inputStr;
+            summaryParts.push(`[已执行工具 ${block.name}(${inputPreview})]`);
+          } else if (block.type === 'text' && (block as Anthropic.TextBlock).text) {
+            summaryParts.push((block as Anthropic.TextBlock).text);
+          }
+        }
+        result.push({ role: 'assistant', content: summaryParts.join('\n') || '[工具调用]' });
+
+        // 下一条是对应的 tool_result（user 角色），也压缩为纯文本
+        if (i + 1 < messages.length && messages[i + 1].role === 'user') {
+          const nextMsg = messages[i + 1];
+          if (Array.isArray(nextMsg.content)) {
+            const resultParts: string[] = [];
+            for (const block of nextMsg.content as Anthropic.ToolResultBlockParam[]) {
+              if (block.type === 'tool_result') {
+                const contentStr = typeof block.content === 'string' ? block.content : '';
+                const preview = contentStr.length > 100 ? contentStr.slice(0, 100) + '...' : contentStr;
+                resultParts.push(block.is_error ? `[失败: ${preview}]` : `[成功: ${preview}]`);
+              }
+            }
+            result.push({ role: 'user', content: resultParts.join('\n') || '[工具结果]' });
+            i++; // 跳过已处理的 tool_result
+          } else {
+            result.push(nextMsg);
+            i++;
+          }
+        }
+      } else {
+        result.push(msg);
+      }
+    }
+
+    return result;
+  }
 
   /**
    * 内部工具调用处理（保持完整的 Anthropic.MessageParam[] 格式）
    * 递归时不需要格式转换，保持 tool_use 和 tool_result 的完整结构
+   * 
+   * Token 优化：
+   *   1. 工具结果超过 4000 字符自动截断
+   *   2. 超过 2 轮工具调用时，旧轮次压缩为摘要
    */
   private async handleToolUseInternal(
     response: Anthropic.Message,
@@ -466,7 +555,7 @@ export class ApiClient {
     }
     
     // 在已有消息基础上追加 assistant 回复（包含完整的 tool_use blocks）
-    const newMessages: Anthropic.MessageParam[] = [
+    let newMessages: Anthropic.MessageParam[] = [
       ...messages,
       {
         role: 'assistant' as const,
@@ -480,10 +569,12 @@ export class ApiClient {
     for (const toolUse of toolUseBlocks) {
       try {
         const result = await executeTool(toolUse.name, toolUse.input);
+        const content = typeof result === 'string' ? result : JSON.stringify(result);
+        // 截断过长的工具结果，节省 token
         toolResults.push({
           type: 'tool_result',
           tool_use_id: toolUse.id,
-          content: typeof result === 'string' ? result : JSON.stringify(result),
+          content: ApiClient.truncateToolResult(content, ApiClient.MAX_TOOL_RESULT_CHARS),
         });
       } catch (error) {
         // 工具执行失败，返回错误信息
@@ -501,6 +592,11 @@ export class ApiClient {
       role: 'user',
       content: toolResults,
     });
+
+    // 深层工具链压缩：超过 2 轮时，旧轮次压缩为摘要
+    if (depth >= ApiClient.KEEP_RECENT_TOOL_ROUNDS) {
+      newMessages = ApiClient.compressToolHistory(newMessages, ApiClient.KEEP_RECENT_TOOL_ROUNDS);
+    }
     
     // 发送后续请求
     const params: Anthropic.MessageCreateParams = {

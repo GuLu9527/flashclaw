@@ -19,12 +19,13 @@ import {
 import { paths } from './paths.js';
 import { RegisteredGroup } from './types.js';
 import { ApiClient, ChatMessage, ToolSchema, getApiClient, TextBlock, ImageBlock } from './core/api-client.js';
-import { currentModelSupportsVision, getCurrentModelId } from './core/model-capabilities.js';
+import { currentModelSupportsVision, getCurrentModelId, getModelContextWindow } from './core/model-capabilities.js';
 import { MemoryManager, getMemoryManager as getGlobalMemoryManager } from './core/memory.js';
 import { pluginManager } from './plugins/manager.js';
 import { ToolContext, ToolResult as PluginToolResult } from './plugins/types.js';
 import { recordTokenUsage, checkCompactThreshold } from './session-tracker.js';
 import { createLogger } from './logger.js';
+import { checkContextSafety } from './core/context-guard.js';
 
 const logger = createLogger('AgentRunner');
 
@@ -289,11 +290,34 @@ function getGroupSystemPrompt(group: RegisteredGroup, isMain: boolean, isSchedul
   const claudeMdPath = path.join(groupDir, 'CLAUDE.md');
   let basePrompt = '';
   
+  // 读取 SOUL.md 人格设定（会话级优先于全局）
+  let soulContent = '';
+  const soulSessionPath = path.join(groupDir, 'SOUL.md');
+  const soulGlobalPath = path.join(paths.home(), 'SOUL.md');
+  
+  if (fs.existsSync(soulSessionPath)) {
+    try {
+      soulContent = fs.readFileSync(soulSessionPath, 'utf-8').trim();
+      logger.debug({ path: soulSessionPath }, '加载会话级 SOUL.md');
+    } catch { /* ignore read errors */ }
+  } else if (fs.existsSync(soulGlobalPath)) {
+    try {
+      soulContent = fs.readFileSync(soulGlobalPath, 'utf-8').trim();
+      logger.debug({ path: soulGlobalPath }, '加载全局 SOUL.md');
+    } catch { /* ignore read errors */ }
+  }
+  
   // 预计算时间示例，帮助 AI 正确理解 ISO 时间
   const in10Seconds = new Date(now.getTime() + 10000).toISOString();
   const in30Seconds = new Date(now.getTime() + 30000).toISOString();
   const in1Minute = new Date(now.getTime() + 60000).toISOString();
   const in5Minutes = new Date(now.getTime() + 300000).toISOString();
+  
+  // 注入 SOUL.md 人格设定（注入到系统提示词最前面）
+  let soulPrefix = '';
+  if (soulContent) {
+    soulPrefix = `\n\n## 人格设定\n\n请完全按照以下人格设定来回复：\n\n${soulContent}\n\n`;
+  }
   
   if (fs.existsSync(claudeMdPath)) {
     // 用户自定义提示词，追加时间和工具信息
@@ -334,6 +358,11 @@ send_message({ image: "latest_screenshot", caption: "可选的说明文字" })
 
 请用中文回复，除非用户使用其他语言。
 保持回复简洁、有帮助。`;
+  }
+  
+  // 将 SOUL.md 人格设定注入到 basePrompt 最前面
+  if (soulPrefix) {
+    basePrompt = soulPrefix + basePrompt;
   }
   
   // 构建包含长期记忆的系统提示词
@@ -543,6 +572,62 @@ async function runAgentOnce(
     toolCount: tools.length,
     toolNames: tools.map(t => t.name)
   }, '⚡ 可用工具列表');
+
+  // ==================== 上下文窗口保护 ====================
+  const modelContextWindow = getModelContextWindow(currentModel);
+  // 估算系统提示词 token（中英混合，保守按 1 字符 ≈ 0.5 token）
+  const systemTokensEstimate = Math.ceil(systemPrompt.length / 2);
+  const messagesTokensEstimate = memoryManager.estimateTokens(messages);
+  const usedTokens = systemTokensEstimate + messagesTokensEstimate;
+
+  const ctxCheck = checkContextSafety({
+    usedTokens,
+    maxTokens: modelContextWindow,
+    model: currentModel,
+  });
+
+  if (!ctxCheck.safe) {
+    // 剩余空间严重不足（低于 CONTEXT_MIN_TOKENS），直接返回错误
+    logger.error({
+      group: group.name,
+      usedTokens,
+      modelContextWindow,
+      error: ctxCheck.error,
+    }, '🛡️ 上下文窗口空间不足，拒绝请求');
+
+    return {
+      status: 'error',
+      result: null,
+      error: ctxCheck.error || '上下文窗口空间不足，请执行 /compact 压缩对话后重试。',
+    };
+  }
+
+  if (ctxCheck.shouldCompact) {
+    // 空间紧张（低于 CONTEXT_WARN_TOKENS），自动触发压缩后继续
+    logger.warn({
+      group: group.name,
+      usedTokens,
+      modelContextWindow,
+      warning: ctxCheck.warning,
+    }, '🛡️ 上下文窗口空间紧张，触发自动压缩');
+
+    await memoryManager.compact(group.folder, apiClient);
+
+    // 压缩后重新获取上下文和消息
+    const compactedContext = memoryManager.getContext(group.folder);
+    const compactedMessages: ChatMessage[] = [...compactedContext, userMessage];
+    // 用压缩后的消息替换原消息列表
+    messages.length = 0;
+    messages.push(...compactedMessages);
+
+    const newTokensEstimate = memoryManager.estimateTokens(messages) + systemTokensEstimate;
+    logger.info({
+      group: group.name,
+      beforeTokens: usedTokens,
+      afterTokens: newTokensEstimate,
+      saved: usedTokens - newTokensEstimate,
+    }, '🛡️ 上下文压缩完成');
+  }
 
   // 活动超时机制：有数据流动时自动延长超时
   let activityTimer: NodeJS.Timeout | null = null;

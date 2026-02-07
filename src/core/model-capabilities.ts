@@ -35,9 +35,9 @@ const MODEL_CAPABILITIES: ModelCapabilities[] = [
   // Google Gemini 系列（支持图片）
   { pattern: /^gemini/i, provider: 'google', input: ['text', 'image', 'audio', 'video'], contextWindow: 1000000 },
   
-  // MiniMax 系列（不支持图片）
-  { pattern: /^abab/i, provider: 'minimax', input: ['text'], contextWindow: 32000 },
-  { pattern: /^minimax/i, provider: 'minimax', input: ['text'], contextWindow: 32000 },
+  // MiniMax 系列
+  { pattern: /^abab/i, provider: 'minimax', input: ['text'], contextWindow: 200000 },
+  { pattern: /^minimax/i, provider: 'minimax', input: ['text'], contextWindow: 200000 },
   
   // 智谱 GLM 系列
   { pattern: /^glm-4v/i, provider: 'zhipu', input: ['text', 'image'], contextWindow: 128000 },
@@ -92,10 +92,32 @@ export function modelSupportsAudio(modelId: string): boolean {
 
 /**
  * 获取模型的上下文窗口大小
+ * 
+ * 解析优先级：
+ *   1. 环境变量 CONTEXT_WINDOW_SIZE（用户显式指定，最高优先）
+ *   2. 内置模型目录匹配
+ *   3. 默认值 128000
+ * 
+ * 这样任何新模型接入都不需要改代码，只需设环境变量即可。
  */
 export function getModelContextWindow(modelId: string): number {
+  // 1. 环境变量优先
+  const envValue = process.env.CONTEXT_WINDOW_SIZE;
+  if (envValue) {
+    const parsed = parseInt(envValue, 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+
+  // 2. 内置目录匹配
   const cap = findModelCapabilities(modelId);
-  return cap?.contextWindow ?? 32000; // 默认 32k
+  if (cap?.contextWindow) {
+    return cap.contextWindow;
+  }
+
+  // 3. 默认值（未知模型按 200K 估算）
+  return 200000;
 }
 
 /**
