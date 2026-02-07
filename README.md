@@ -12,6 +12,7 @@
 - 🧱 **乐高式架构** - 通讯渠道和工具都是可插拔的插件
 - 🔥 **热加载** - 运行时加载插件，无需重启
 - 🇨🇳 **中国本土** - 飞书原生支持
+- 🌍 **全球通讯** - Telegram 原生支持（长轮询，无需公网服务器）
 - 🤖 **智能响应** - 群聊 @提及、私聊自动回复
 - 📅 **定时任务** - 支持 cron、间隔、一次性任务，具备精确定时、并发控制、超时保护和自动重试
 
@@ -64,8 +65,9 @@ flashclaw doctor
 
 ```bash
 # 从官方仓库安装
-flashclaw plugins install hello-world
+flashclaw plugins install telegram
 flashclaw plugins install web-fetch
+flashclaw plugins install hello-world
 ```
 
 ## 插件系统
@@ -74,7 +76,18 @@ FlashClaw 采用乐高式插件架构，添加功能就像放 Minecraft Mod 一�
 
 ```
 plugins/
-├── feishu/          # 飞书渠道插件
+├── feishu/          # 飞书渠道插件（内置）
+├── send-message/    # 发送消息工具
+
+community-plugins/
+├── telegram/        # Telegram 渠道插件（社区）
+├── hello-world/     # 示例插件
+├── web-fetch/       # 网页抓取工具
+├── web-ui/          # Web 管理界面
+└── browser-control/ # 浏览器控制工具
+
+~/.flashclaw/plugins/  # 用户安装的插件目录
+├── telegram/        # flashclaw plugins install telegram
 ├── send-message/    # 发送消息工具
 ├── schedule-task/   # 创建定时任务
 ├── list-tasks/      # 列出定时任务
@@ -125,6 +138,11 @@ ANTHROPIC_MODEL=claude-4-5-sonnet-20250929
 # 飞书配置
 FEISHU_APP_ID=cli_xxx
 FEISHU_APP_SECRET=xxx
+
+# Telegram 配置
+TELEGRAM_BOT_TOKEN=xxx          # 从 @BotFather 获取
+# TELEGRAM_PROXY=http://127.0.0.1:7890  # 可选，HTTP 代理
+# TELEGRAM_ALLOWED_USERS=123456789      # 可选，用户白名单
 
 # 其他配置
 BOT_NAME=FlashClaw

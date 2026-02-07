@@ -4,6 +4,27 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，
 并遵循 [语义化版本](https://semver.org/spec/v2.0.0.html)。
 
+## [1.4.0] - 2026-02-07
+
+### 新增
+- Telegram 渠道插件（community-plugins/telegram）
+  - 长轮询模式，无需公网服务器
+  - 私聊 + 群聊（@提及 / 回复触发）
+  - 图片收发（下载→base64，发送 base64/Buffer）
+  - 消息编辑/删除（"正在思考..." 更新）
+  - HTTP 代理支持（Bot API + 文件下载统一走代理）
+  - 用户白名单（TELEGRAM_ALLOWED_USERS）
+- 插件安装器自动安装插件的 npm 依赖（package.json dependencies）
+- 插件安装后自动提示需要配置的环境变量
+- doctor 命令通用检查用户已安装插件的环境变量配置
+- 插件加载器支持用户目录 src 链接（社区插件引用核心模块）
+- 插件加载器支持插件自有 node_modules 模块解析
+
+### 修复
+- 修复代理上传图片崩溃：Node.js 22 要求 duplex: 'half'
+- 修复 IPC 工具调用缺少 platform 路由，导致工具发消息到错误渠道
+- send_message 工具兼容 AI 传 screenshot 文件名（而非 latest_screenshot）
+
 ## [1.3.0] - 2026-02-06
 
 ### 修复
