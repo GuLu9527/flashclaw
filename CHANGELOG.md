@@ -4,6 +4,19 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，
 并遵循 [语义化版本](https://semver.org/spec/v2.0.0.html)。
 
+## [1.5.1] - 2026-02-08
+
+### 修复
+- **P0: 双重重试放大** — 移除 `ApiClient.chat()` 的内部重试逻辑，统一由 `agent-runner` 管理，避免 3×3=9 次重复请求
+- **P0: `/compact` 命令无 await** — 压缩失败时错误被吞掉，现在正确 await 并向用户反馈错误
+- **P1: 浏览器长工具链超时** — `handleToolUseInternal` 后续请求改为流式，新增心跳回调机制（`HeartbeatCallback`），防止活动超时误杀长工具链
+- `catch (err: any)` 修正为 `catch (err: unknown)`，符合 TypeScript strict 模式
+
+### 改进
+- **拆分 index.ts（减少约 250 行）**：抽取 `ChannelManager` 到 `src/channel-manager.ts`，抽取网络工具函数到 `src/utils/network.ts`
+- `maxTokens: 4096` 硬编码提取为 `AI_MAX_OUTPUT_TOKENS` 配置常量（支持环境变量覆盖）
+- `browser_snapshot` 默认限制 8000 字符，防止大页面撑爆上下文窗口
+
 ## [1.5.0] - 2026-02-07
 
 ### 新增

@@ -14,6 +14,7 @@ import path from 'path';
 import type Anthropic from '@anthropic-ai/sdk';
 import {
   AGENT_TIMEOUT,
+  AI_MAX_OUTPUT_TOKENS,
   TIMEZONE
 } from './config.js';
 import { paths } from './paths.js';
@@ -663,7 +664,7 @@ async function runAgentOnce(
     for await (const event of apiClient.chatStream(messages, {
       system: systemPrompt,
       tools,
-      maxTokens: 4096
+      maxTokens: AI_MAX_OUTPUT_TOKENS
     })) {
       // 每收到数据就重置超时计时器
       resetActivityTimeout();
@@ -712,7 +713,7 @@ async function runAgentOnce(
 
     // 检查是否有工具调用
     if (finalResponse.stop_reason === 'tool_use') {
-      // 处理工具调用（使用活动超时）
+      // 处理工具调用（使用活动超时 + 心跳）
       resetActivityTimeout();
       
       result = await apiClient.handleToolUse(
@@ -726,7 +727,9 @@ async function runAgentOnce(
           }
           return toolResult.content;
         },
-        { system: systemPrompt, tools, maxTokens: 4096 }
+        { system: systemPrompt, tools, maxTokens: AI_MAX_OUTPUT_TOKENS },
+        // 心跳回调：工具链内每收到流式数据或执行工具时重置超时
+        () => resetActivityTimeout()
       );
       
       clearActivityTimeout();

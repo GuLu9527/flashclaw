@@ -23,9 +23,7 @@ export interface ApiConfig {
   baseURL?: string;
   /** 模型名称 */
   model?: string;
-  /** 最大重试次数 */
-  maxRetries?: number;
-  /** 请求超时时间（毫秒） */
+  /** 请求超时时间（毫秒），传给 Anthropic SDK */
   timeout?: number;
 }
 
@@ -109,6 +107,12 @@ export type StreamEvent =
  */
 export type ToolExecutor = (name: string, params: unknown) => Promise<unknown>;
 
+/**
+ * 心跳回调 - 用于通知外层（如 agent-runner）工具链仍在活动中
+ * 调用此函数可重置活动超时计时器，防止长工具链被误判为超时
+ */
+export type HeartbeatCallback = () => void;
+
 // ==================== Mock API (E2E) ====================
 
 const MOCK_RESPONSE_PREFIX = process.env.FLASHCLAW_MOCK_RESPONSE_PREFIX || 'MOCK';
@@ -180,19 +184,15 @@ function buildMockMessage(params: {
 export class ApiClient {
   private client: Anthropic;
   private model: string;
-  private maxRetries: number;
-  private timeout: number;
   
   constructor(config: ApiConfig) {
     this.client = new Anthropic({
       apiKey: config.apiKey,
       baseURL: config.baseURL,
-      maxRetries: 0,  // 禁用 SDK 重试，由 chat() 方法统一处理
+      maxRetries: 0,  // 禁用 SDK 重试，由 agent-runner 统一管理重试策略
       timeout: config.timeout ?? 60000,
     });
     this.model = config.model || 'claude-sonnet-4-20250514'; // 注意：调用方应传入 DEFAULT_AI_MODEL
-    this.maxRetries = config.maxRetries ?? 3;
-    this.timeout = config.timeout ?? 60000;
   }
   
   /**
@@ -243,29 +243,8 @@ export class ApiClient {
       params.stop_sequences = options.stopSequences;
     }
     
-    // 发送请求，带重试
-    let lastError: Error | null = null;
-    for (let attempt = 0; attempt < this.maxRetries; attempt++) {
-      try {
-        const response = await this.client.messages.create(params);
-        return response;
-      } catch (error) {
-        lastError = error as Error;
-        
-        // 判断是否可重试
-        if (this.isRetryableError(error)) {
-          // 指数退避
-          const delay = Math.min(1000 * Math.pow(2, attempt), 10000);
-          await this.sleep(delay);
-          continue;
-        }
-        
-        // 不可重试的错误直接抛出
-        throw error;
-      }
-    }
-    
-    throw lastError || new Error('API 请求失败');
+    // 直接发送请求，不做重试（重试由 agent-runner 统一管理）
+    return await this.client.messages.create(params);
   }
   
   /**
@@ -427,14 +406,15 @@ export class ApiClient {
     response: Anthropic.Message,
     messages: ChatMessage[],
     executeTool: ToolExecutor,
-    options?: ChatOptions
+    options?: ChatOptions,
+    heartbeat?: HeartbeatCallback
   ): Promise<string> {
     // 将 ChatMessage[] 转换为 Anthropic.MessageParam[] 后调用内部方法
     const apiMessages: Anthropic.MessageParam[] = messages.map(msg => ({
       role: msg.role as 'user' | 'assistant',
       content: msg.content,
     }));
-    return this.handleToolUseInternal(response, apiMessages, executeTool, options);
+    return this.handleToolUseInternal(response, apiMessages, executeTool, options, 0, heartbeat);
   }
   
   /** 最大工具调用递归深度，防止无限递归导致栈溢出 */
@@ -538,7 +518,8 @@ export class ApiClient {
     messages: Anthropic.MessageParam[],
     executeTool: ToolExecutor,
     options?: ChatOptions,
-    depth: number = 0
+    depth: number = 0,
+    heartbeat?: HeartbeatCallback
   ): Promise<string> {
     // 防止无限递归
     if (depth >= ApiClient.MAX_TOOL_CALL_DEPTH) {
@@ -567,6 +548,8 @@ export class ApiClient {
     const toolResults: Anthropic.ToolResultBlockParam[] = [];
     
     for (const toolUse of toolUseBlocks) {
+      // 每次工具执行前发送心跳，防止活动超时
+      heartbeat?.();
       try {
         const result = await executeTool(toolUse.name, toolUse.input);
         const content = typeof result === 'string' ? result : JSON.stringify(result);
@@ -587,6 +570,9 @@ export class ApiClient {
       }
     }
     
+    // 工具执行完成后发送心跳
+    heartbeat?.();
+    
     // 添加工具结果（完整的 tool_result blocks）
     newMessages.push({
       role: 'user',
@@ -598,11 +584,31 @@ export class ApiClient {
       newMessages = ApiClient.compressToolHistory(newMessages, ApiClient.KEEP_RECENT_TOOL_ROUNDS);
     }
     
-    // 发送后续请求
+    // 使用流式请求发送后续工具链调用（避免长时间无活动导致超时）
+    const nextResponse = await this.streamFollowUp(newMessages, options, heartbeat);
+    
+    // 递归处理多轮工具调用，保持完整消息结构
+    if (nextResponse.stop_reason === 'tool_use') {
+      return this.handleToolUseInternal(nextResponse, newMessages, executeTool, options, depth + 1, heartbeat);
+    }
+    
+    return this.extractText(nextResponse);
+  }
+  
+  /**
+   * 流式发送后续请求（工具链内部使用）
+   * 通过流式传输保持活动状态，避免长时间等待导致超时
+   */
+  private async streamFollowUp(
+    messages: Anthropic.MessageParam[],
+    options?: ChatOptions,
+    heartbeat?: HeartbeatCallback
+  ): Promise<Anthropic.Message> {
     const params: Anthropic.MessageCreateParams = {
       model: this.model,
       max_tokens: options?.maxTokens ?? 4096,
-      messages: newMessages,
+      messages,
+      stream: true,
     };
     
     if (options?.system) {
@@ -613,14 +619,77 @@ export class ApiClient {
       params.tools = options.tools;
     }
     
-    const nextResponse = await this.client.messages.create(params);
+    const stream = await this.client.messages.create(params);
     
-    // 递归处理多轮工具调用，保持完整消息结构
-    if (nextResponse.stop_reason === 'tool_use') {
-      return this.handleToolUseInternal(nextResponse, newMessages, executeTool, options, depth + 1);
+    // 从流式事件中组装完整消息
+    let finalMessage: Anthropic.Message | null = null;
+    const contentBlocks: Array<Anthropic.TextBlock | Anthropic.ToolUseBlock> = [];
+    const partialJsonParts = new Map<number, string[]>();
+    
+    for await (const event of stream as AsyncIterable<Anthropic.MessageStreamEvent>) {
+      // 每收到数据就发送心跳
+      heartbeat?.();
+      
+      if (event.type === 'message_start') {
+        finalMessage = event.message as Anthropic.Message;
+      } else if (event.type === 'content_block_start') {
+        const block = event.content_block;
+        if (block.type === 'text') {
+          contentBlocks[event.index] = { type: 'text' as const, text: '', citations: null };
+        } else if (block.type === 'tool_use') {
+          contentBlocks[event.index] = {
+            type: 'tool_use' as const,
+            id: block.id,
+            name: block.name,
+            input: {},
+          };
+          partialJsonParts.set(event.index, []);
+        }
+      } else if (event.type === 'content_block_delta') {
+        const delta = event.delta;
+        if ('text' in delta) {
+          const block = contentBlocks[event.index];
+          if (block?.type === 'text') {
+            block.text += delta.text;
+          }
+        } else if ('partial_json' in delta) {
+          const parts = partialJsonParts.get(event.index);
+          if (parts) {
+            parts.push(delta.partial_json);
+          }
+        }
+      } else if (event.type === 'content_block_stop') {
+        const block = contentBlocks[event.index];
+        if (block?.type === 'tool_use') {
+          const parts = partialJsonParts.get(event.index);
+          if (parts && parts.length > 0) {
+            try {
+              block.input = JSON.parse(parts.join(''));
+            } catch {
+              block.input = {};
+            }
+          }
+        }
+      } else if (event.type === 'message_delta') {
+        if (finalMessage) {
+          finalMessage.stop_reason = event.delta.stop_reason ?? finalMessage.stop_reason;
+          if (event.usage) {
+            finalMessage.usage.output_tokens = event.usage.output_tokens;
+          }
+        }
+      }
     }
     
-    return this.extractText(nextResponse);
+    if (!finalMessage) {
+      throw new Error('工具链后续请求未收到响应');
+    }
+    
+    // 组装完整消息
+    finalMessage.content = contentBlocks.filter(
+      (block): block is Anthropic.TextBlock | Anthropic.ToolUseBlock => block != null
+    );
+    
+    return finalMessage;
   }
   
   /**
@@ -652,27 +721,6 @@ export class ApiClient {
     this.model = model;
   }
   
-  /**
-   * 判断错误是否可重试
-   */
-  private isRetryableError(error: unknown): boolean {
-    if (error instanceof Anthropic.APIError) {
-      // 429 Rate Limit, 500+ Server Error 可重试
-      return error.status === 429 || error.status >= 500;
-    }
-    // 网络错误可重试
-    if (error instanceof Error && error.message.includes('fetch')) {
-      return true;
-    }
-    return false;
-  }
-  
-  /**
-   * 延迟函数
-   */
-  private sleep(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
-  }
 }
 
 class MockApiClient extends ApiClient {
@@ -786,7 +834,6 @@ export function createApiClient(): ApiClient | null {
     apiKey,
     baseURL: process.env.ANTHROPIC_BASE_URL,
     model: process.env.AI_MODEL || process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-20250514',
-    maxRetries: process.env.API_MAX_RETRIES ? (parseInt(process.env.API_MAX_RETRIES, 10) || undefined) : undefined,
     timeout: process.env.API_TIMEOUT ? (parseInt(process.env.API_TIMEOUT, 10) || undefined) : undefined,
   });
 }

@@ -425,6 +425,9 @@ async function executeLaunch(params: BrowserLaunchParams): Promise<ToolResult> {
   }
 }
 
+/** 默认快照最大字符数（防止撑爆上下文窗口） */
+const DEFAULT_SNAPSHOT_MAX_CHARS = 8000;
+
 /**
  * 执行 browser_snapshot
  */
@@ -434,7 +437,7 @@ async function executeSnapshot(params: BrowserSnapshotParams): Promise<ToolResul
     const page = await getPage(cdpUrl, params.targetId);
     
     const result = await snapshotAi(page, {
-      maxChars: params.maxChars,
+      maxChars: params.maxChars ?? DEFAULT_SNAPSHOT_MAX_CHARS,
       cdpUrl,
       targetId: params.targetId,
     });

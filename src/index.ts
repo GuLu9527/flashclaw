@@ -13,16 +13,24 @@ import { homedir } from 'os';
 const flashclawHome = process.env.FLASHCLAW_HOME || path.join(homedir(), '.flashclaw');
 dotenv.config({ path: path.join(flashclawHome, '.env') });
 dotenv.config(); // 项目根目录 .env
-import { isIP } from 'net';
 import pino from 'pino';
 import { z } from 'zod';
 
 import { paths, ensureDirectories, getBuiltinPluginsDir } from './paths.js';
 import { pluginManager } from './plugins/manager.js';
 import { loadFromDir, watchPlugins, stopWatching } from './plugins/loader.js';
-import { ChannelPlugin, Message, MessageHandler, SendMessageResult, ToolContext } from './plugins/types.js';
+import { Message, ToolContext } from './plugins/types.js';
 import { ApiClient, getApiClient } from './core/api-client.js';
 import { MemoryManager, getMemoryManager } from './core/memory.js';
+import { ChannelManager } from './channel-manager.js';
+import {
+  extractFirstUrl,
+  isPrivateIp,
+  isBlockedHostname,
+  estimateBase64Bytes,
+  truncateText,
+  escapeXml
+} from './utils/network.js';
 import {
   BOT_NAME,
   DEFAULT_AI_MODEL,
@@ -77,141 +85,6 @@ const logger = pino({
   transport: { target: 'pino-pretty', options: { colorize: true } }
 });
 
-// ==================== 渠道管理 ====================
-/**
- * 渠道管理器 - 管理所有已启用的通讯渠道插件
- */
-class ChannelManager {
-  private channels: ChannelPlugin[] = [];
-  private enabledPlatforms: string[] = [];
-  
-  async initialize(): Promise<void> {
-    this.channels = pluginManager.getActiveChannels();
-    this.enabledPlatforms = this.channels.map(c => c.name);
-    
-    if (this.channels.length === 0) {
-      throw new Error('没有启用任何通讯渠道');
-    }
-  }
-  
-  async start(onMessage: MessageHandler): Promise<void> {
-    for (const channel of this.channels) {
-      channel.onMessage(onMessage);
-      await channel.start();
-      logger.info({ channel: channel.name }, '⚡ 渠道已启动');
-    }
-  }
-  
-  async sendMessage(chatId: string, content: string, platform?: string): Promise<SendMessageResult> {
-    // 如果指定了平台，使用指定的渠道
-    if (platform) {
-      const channel = this.channels.find(c => c.name === platform);
-      if (channel) {
-        return await channel.sendMessage(chatId, content);
-      }
-    }
-    // 否则尝试所有渠道
-    for (const channel of this.channels) {
-      try {
-        return await channel.sendMessage(chatId, content);
-      } catch (err) {
-        logger.debug({ channel: channel.name, chatId, err }, '渠道发送消息失败，尝试下一个');
-        continue;
-      }
-    }
-    return { success: false, error: `无法发送消息到 ${chatId}` };
-  }
-  
-  async updateMessage(messageId: string, content: string, platform?: string): Promise<void> {
-    // 如果指定了平台，使用指定的渠道
-    if (platform) {
-      const channel = this.channels.find(c => c.name === platform);
-      if (channel?.updateMessage) {
-        await channel.updateMessage(messageId, content);
-        return;
-      }
-    }
-    // 尝试所有支持更新的渠道
-    for (const channel of this.channels) {
-      if (channel.updateMessage) {
-        try {
-          await channel.updateMessage(messageId, content);
-          return;
-        } catch (err) {
-          logger.debug({ channel: channel.name, messageId, err }, '渠道更新消息失败，尝试下一个');
-          continue;
-        }
-      }
-    }
-  }
-  
-  async deleteMessage(messageId: string, platform?: string): Promise<void> {
-    if (platform) {
-      const channel = this.channels.find(c => c.name === platform);
-      if (channel?.deleteMessage) {
-        await channel.deleteMessage(messageId);
-        return;
-      }
-    }
-    for (const channel of this.channels) {
-      if (channel.deleteMessage) {
-        try {
-          await channel.deleteMessage(messageId);
-          return;
-        } catch (err) {
-          logger.debug({ channel: channel.name, messageId, err }, '渠道删除消息失败，尝试下一个');
-          continue;
-        }
-      }
-    }
-  }
-  
-  async sendImage(chatId: string, imageData: string, caption?: string, platform?: string): Promise<SendMessageResult> {
-    // 如果指定了平台，使用指定的渠道
-    if (platform) {
-      const channel = this.channels.find(c => c.name === platform);
-      if (channel?.sendImage) {
-        return await channel.sendImage(chatId, imageData, caption);
-      }
-      // 渠道不支持发送图片，降级为发送文本提示
-      logger.warn({ platform, chatId }, '渠道不支持发送图片，已降级');
-      return await this.sendMessage(chatId, caption || '[图片无法显示]', platform);
-    }
-    // 尝试所有支持图片的渠道
-    for (const channel of this.channels) {
-      if (channel.sendImage) {
-        try {
-          return await channel.sendImage(chatId, imageData, caption);
-        } catch (err) {
-          logger.debug({ channel: channel.name, chatId, err }, '渠道发送图片失败，尝试下一个');
-          continue;
-        }
-      }
-    }
-    // 所有渠道都不支持，降级为文本
-    logger.warn({ chatId }, '没有渠道支持发送图片，已降级');
-    return await this.sendMessage(chatId, caption || '[图片无法显示]', platform);
-  }
-  
-  getEnabledPlatforms(): string[] {
-    return this.enabledPlatforms;
-  }
-  
-  getPlatformDisplayName(platform: string): string {
-    const names: Record<string, string> = {
-      'feishu': '飞书',
-    };
-    return names[platform] || platform;
-  }
-  
-  shouldRespondInGroup(msg: Message): boolean {
-    // 检查是否被 @ 或提到机器人名称
-    const botName = process.env.BOT_NAME || 'FlashClaw';
-    return msg.content.includes(`@${botName}`) || 
-           msg.content.toLowerCase().includes(botName.toLowerCase());
-  }
-}
-
 // ==================== 全局状态 ====================
 let channelManager: ChannelManager;
 let apiClient: ApiClient | null;
@@ -225,9 +98,6 @@ let isShuttingDown = false;
 // 直接网页抓取触发（避免模型不触发工具）
 const WEB_FETCH_TOOL_NAME = 'web_fetch';
 const WEB_FETCH_INTENT_RE = /(抓取|获取|读取|访问|打开|爬取|网页|网站|链接|fetch|web)/i;
-const WEB_FETCH_URL_RE = /https?:\/\/[^\s<>()]+/i;
-const WEB_FETCH_DOMAIN_RE = /(?:^|[^A-Za-z0-9.-])((?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,})(:\d{2,5})?(\/[^\s<>()]*)?/i;
-const TRAILING_PUNCT_RE = /[)\],.。，;；!！?？]+$/;
 
 // ==================== 状态管理 ====================
 
@@ -327,83 +197,9 @@ function shouldTriggerAgent(msg: Message, group: RegisteredGroup): boolean {
   return false;
 }
 
-export function extractFirstUrl(text: string): string | null {
-  const match = text.match(WEB_FETCH_URL_RE);
-  if (match) {
-    return match[0].replace(TRAILING_PUNCT_RE, '');
-  }
-
-  const domainMatch = text.match(WEB_FETCH_DOMAIN_RE);
-  if (!domainMatch) return null;
-  const host = domainMatch[1];
-  const port = domainMatch[2] ?? '';
-  const path = domainMatch[3] ?? '';
-  const candidate = `https://${host}${port}${path}`;
-  return candidate.replace(TRAILING_PUNCT_RE, '');
-}
-
-export function isPrivateIpv4(ip: string): boolean {
-  const parts = ip.split('.').map((part) => Number(part));
-  if (parts.length !== 4 || parts.some((part) => Number.isNaN(part))) return false;
-
-  const [a, b] = parts;
-  if (a === 0) return true;
-  if (a === 10) return true;
-  if (a === 127) return true;
-  if (a === 169 && b === 254) return true;
-  if (a === 172 && b >= 16 && b <= 31) return true;
-  if (a === 192 && b === 168) return true;
-  if (a === 100 && b >= 64 && b <= 127) return true;
-  return false;
-}
-
-export function isPrivateIpv6(ip: string): boolean {
-  const normalized = ip.toLowerCase();
-  if (normalized === '::' || normalized === '::1') return true;
-  if (normalized.startsWith('fe80:')) return true;
-  if (normalized.startsWith('fec0:')) return true;
-  if (normalized.startsWith('fc') || normalized.startsWith('fd')) return true;
-
-  if (normalized.includes('::ffff:')) {
-    const ipv4Part = normalized.split('::ffff:')[1];
-    if (ipv4Part && isPrivateIpv4(ipv4Part)) return true;
-  }
-
-  return false;
-}
-
-export function isPrivateIp(ip: string): boolean {
-  const family = isIP(ip);
-  if (family === 4) return isPrivateIpv4(ip);
-  if (family === 6) return isPrivateIpv6(ip);
-  return false;
-}
-
-export function isBlockedHostname(hostname: string): boolean {
-  const normalized = hostname.trim().toLowerCase();
-  if (normalized === 'localhost') return true;
-  return (
-    normalized.endsWith('.localhost') ||
-    normalized.endsWith('.local') ||
-    normalized.endsWith('.internal')
-  );
-}
-
-export function estimateBase64Bytes(content: string): number | null {
-  if (!content) return null;
-  const raw = content.startsWith('data:') ? content.split(',')[1] ?? '' : content;
-  const normalized = raw.replace(/\s+/g, '');
-  if (!normalized) return 0;
-  const padding = normalized.endsWith('==') ? 2 : normalized.endsWith('=') ? 1 : 0;
-  return Math.max(0, Math.floor((normalized.length * 3) / 4) - padding);
-}
-
-export function truncateText(text: string, maxLength: number): { text: string; truncated: boolean } {
-  if (text.length <= maxLength) {
-    return { text, truncated: false };
-  }
-  return { text: `${text.slice(0, maxLength)}\n\n...（内容已截断）`, truncated: true };
-}
+// 重新导出工具函数（保持向后兼容）
+export { extractFirstUrl, isPrivateIp, isBlockedHostname, estimateBase64Bytes, truncateText } from './utils/network.js';
+export { isPrivateIpv4, isPrivateIpv6 } from './utils/network.js';
 
 export function formatDirectWebFetchResponse(url: string, result: { success: boolean; data?: unknown; error?: string }): string {
   if (!result.success) {
@@ -463,7 +259,8 @@ async function tryHandleDirectWebFetch(msg: Message, group: RegisteredGroup): Pr
 
   const allowPrivate = process.env.WEB_FETCH_ALLOW_PRIVATE === '1';
   const hostname = urlObj.hostname;
-  if (!allowPrivate && (isBlockedHostname(hostname) || (isIP(hostname) && isPrivateIp(hostname)))) {
+  const { isIP: checkIP } = await import('net');
+  if (!allowPrivate && (isBlockedHostname(hostname) || (checkIP(hostname) && isPrivateIp(hostname)))) {
     await sendMessage(msg.chatId, `${BOT_NAME}: 目标地址禁止访问内网`, msg.platform);
     return true;
   }
@@ -534,13 +331,6 @@ async function processQueuedMessage(queuedMsg: QueuedMessage<Message>): Promise<
   // 获取历史上下文
   const historyMessages = getChatHistory(chatId, HISTORY_CONTEXT_LIMIT, sinceTimestamp);
   
-  const escapeXml = (s: string) => s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
-
   // 构建带历史上下文的 prompt
   let prompt = '';
   
@@ -655,7 +445,7 @@ async function processQueuedMessage(queuedMsg: QueuedMessage<Message>): Promise<
         logger.debug({ chatId, messageId: placeholderMessageId, err: deleteErr }, '删除占位消息失败（无响应）');
       }
     }
-  } catch (err: any) {
+  } catch (err: unknown) {
     thinkingDone = true;
     if (thinkingTimer) {
       clearTimeout(thinkingTimer);
@@ -887,10 +677,15 @@ async function handleIncomingMessage(msg: Message): Promise<void> {
       // 发送命令响应
       await channelManager.sendMessage(chatId, result.response, msg.platform);
       
-      // 如果是 /compact 命令，执行实际压缩
+      // 如果是 /compact 命令，执行实际压缩（必须 await 以确保错误被捕获）
       if (msg.content.trim().toLowerCase().startsWith('/compact') || 
           msg.content.trim() === '/压缩') {
-        context.compactSession?.();
+        try {
+          await context.compactSession?.();
+        } catch (compactErr) {
+          logger.error({ chatId, err: compactErr }, '会话压缩执行失败');
+          await channelManager.sendMessage(chatId, `${BOT_NAME}: ❌ 会话压缩失败，请稍后重试`, msg.platform);
+        }
       }
       
       logger.info({ chatId, command: msg.content }, '⚡ 命令已处理');
