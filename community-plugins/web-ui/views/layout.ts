@@ -24,9 +24,10 @@ export function layout(options: LayoutOptions, content: HtmlEscapedString): Html
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${title} - FlashClaw</title>
   <link rel="stylesheet" href="/public/style.css">
-  <script src="https://unpkg.com/htmx.org@1.9.10"></script>
-  <script src="https://unpkg.com/htmx.org@1.9.10/dist/ext/sse.js"></script>
-  <script src="https://unpkg.com/alpinejs@3.13.3" defer></script>
+  <script src="/public/htmx.min.js"></script>
+  <script src="/public/htmx-sse.js"></script>
+  <script src="/public/alpine.min.js" defer></script>
+  <script src="/public/marked.min.js"></script>
 </head>
 <body>
   <svg class="icon-defs" aria-hidden="true" focusable="false">
@@ -59,7 +60,7 @@ export function layout(options: LayoutOptions, content: HtmlEscapedString): Html
   <nav class="top-nav">
     <div class="nav-inner">
       <a href="/" class="brand">
-        <img src="/assets/flashclaw-icon.png" alt="FlashClaw" class="brand-icon">
+        <img src="/public/flashclaw-icon.svg" alt="FlashClaw" class="brand-icon">
         <span class="brand-text">FlashClaw</span>
       </a>
       <div class="nav-links">

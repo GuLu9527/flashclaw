@@ -124,10 +124,14 @@ pagesRoutes.get('/chat', async (c) => {
   const history = getChatHistory(50);
 
   const content = html`
-    <h1 class="page-title">
-      <svg class="icon" aria-hidden="true"><use href="#icon-chat"></use></svg>
-      <span>AI 对话</span>
-    </h1>
+    <div class="chat-page">
+    <div class="page-title-row">
+      <h1 class="page-title" style="margin-bottom: 0;">
+        <svg class="icon" aria-hidden="true"><use href="#icon-chat"></use></svg>
+        <span>AI 对话</span>
+      </h1>
+      <button class="outline secondary small" onclick="clearChat()" title="清空对话记录">清空</button>
+    </div>
     
     <div class="chat-container">
       <!-- 消息列表 -->
@@ -136,7 +140,9 @@ pagesRoutes.get('/chat', async (c) => {
           ? html`<p style="color: var(--text-tertiary); text-align: center; margin-top: auto; margin-bottom: auto;">开始与 FlashClaw 对话吧！</p>`
           : history.map(msg => html`
             <div class="chat-message ${msg.role}">
-              <div class="content">${msg.content}</div>
+              <div class="content${msg.role === 'assistant' ? ' markdown-body' : ''}"
+                   ${msg.role === 'assistant' ? html`data-raw="${msg.content.replace(/"/g, '&quot;')}"` : ''}
+              >${msg.content}</div>
               <div class="time">${new Date(msg.timestamp).toLocaleTimeString('zh-CN')}</div>
             </div>
           `)}
@@ -160,44 +166,55 @@ pagesRoutes.get('/chat', async (c) => {
         </div>
       </form>
     </div>
-    
-    <div style="margin-top: 1rem; text-align: center;">
-      <button class="outline secondary small" onclick="clearChat()">清空对话</button>
-    </div>
+    </div><!-- .chat-page -->
 
-    <!-- Three.js + 吉祥物脚本（延迟加载） -->
     <script>
+      // ========== Markdown 渲染配置 ==========
+      marked.setOptions({ breaks: true, gfm: true });
+
+      /** 将 Markdown 文本渲染为 HTML */
+      function renderMarkdown(text) {
+        if (!text) return '';
+        return marked.parse(text);
+      }
+
+      // 页面加载后，将已有的 assistant 历史消息渲染为 Markdown
+      document.querySelectorAll('.chat-message.assistant .content.markdown-body').forEach(el => {
+        const raw = el.dataset.raw || el.textContent || '';
+        el.innerHTML = renderMarkdown(raw);
+      });
+
       // ========== 聊天逻辑 ==========
       const messagesContainer = document.getElementById('chat-messages');
       const chatInput = document.getElementById('chat-input');
       const sendBtn = document.getElementById('send-btn');
       
-      // 滚动到底部
       function scrollToBottom() {
         messagesContainer.scrollTop = messagesContainer.scrollHeight;
       }
       scrollToBottom();
       
-      // 自动调整高度
       function adjustTextareaHeight() {
         chatInput.style.height = 'auto';
         chatInput.style.height = Math.min(chatInput.scrollHeight, 200) + 'px';
       }
       chatInput.addEventListener('input', adjustTextareaHeight);
 
-      // 处理键盘事件
       function handleKeyDown(e) {
         if (e.key === 'Enter' && !e.shiftKey) {
           e.preventDefault();
           sendChatMessage(e);
         }
-        // 延迟调整高度，确保换行后能正确计算
         setTimeout(adjustTextareaHeight, 0);
       }
       
-      // 添加消息到界面
+      /**
+       * 添加消息到界面
+       * @param {string} role - 'user' | 'assistant'
+       * @param {string} content - 消息内容
+       * @returns {{ wrapper, contentEl, rawText }} 消息 DOM 引用
+       */
       function addMessage(role, content) {
-        // 移除空提示
         const emptyHint = messagesContainer.querySelector('p');
         if (emptyHint) emptyHint.remove();
         
@@ -205,8 +222,14 @@ pagesRoutes.get('/chat', async (c) => {
         div.className = 'chat-message ' + role;
         
         const contentEl = document.createElement('div');
-        contentEl.className = 'content';
-        contentEl.textContent = content || '';
+        contentEl.className = 'content' + (role === 'assistant' ? ' markdown-body' : '');
+
+        // 用户消息用纯文本，assistant 消息用 Markdown
+        if (role === 'assistant') {
+          contentEl.innerHTML = renderMarkdown(content);
+        } else {
+          contentEl.textContent = content || '';
+        }
 
         const time = document.createElement('div');
         time.className = 'time';
@@ -216,22 +239,20 @@ pagesRoutes.get('/chat', async (c) => {
         div.appendChild(time);
         messagesContainer.appendChild(div);
         scrollToBottom();
-        return { wrapper: div, contentEl };
+        // rawText 用于流式累积原始文本
+        return { wrapper: div, contentEl, rawText: content || '' };
       }
       
-      // 发送消息
       async function sendChatMessage(e) {
         e.preventDefault();
         
         const message = chatInput.value.trim();
         if (!message) return;
         
-        // 禁用输入
         chatInput.disabled = true;
         sendBtn.disabled = true;
         sendBtn.innerHTML = '<span class="htmx-indicator" style="opacity: 1;">...</span>';
         
-        // 添加用户消息
         addMessage('user', message);
         chatInput.value = '';
         chatInput.style.height = 'auto';
@@ -251,11 +272,13 @@ pagesRoutes.get('/chat', async (c) => {
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
             
+            // 流式渲染：累积原始文本，每次 chunk 重新解析 Markdown
             while (true) {
               const { value, done } = await reader.read();
               if (done) break;
               const chunk = decoder.decode(value, { stream: true });
-              assistantMsg.contentEl.textContent += chunk;
+              assistantMsg.rawText += chunk;
+              assistantMsg.contentEl.innerHTML = renderMarkdown(assistantMsg.rawText);
               scrollToBottom();
             }
           }
@@ -263,7 +286,6 @@ pagesRoutes.get('/chat', async (c) => {
           addMessage('assistant', '网络错误: ' + err.message);
         }
         
-        // 恢复输入
         chatInput.disabled = false;
         sendBtn.disabled = false;
         sendBtn.innerHTML = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>';
@@ -271,13 +293,11 @@ pagesRoutes.get('/chat', async (c) => {
         adjustTextareaHeight();
       }
       
-      // 清空对话
       async function clearChat() {
         if (!confirm('确定要清空所有对话记录吗？')) return;
-        
         try {
           await fetch('/api/chat/clear', { method: 'POST' });
-          messagesContainer.innerHTML = '<p style="color: var(--pico-muted-color); text-align: center;">开始与 FlashClaw 对话吧！</p>';
+          messagesContainer.innerHTML = '<p style="color: var(--text-tertiary); text-align: center;">开始与 FlashClaw 对话吧！</p>';
         } catch (err) {
           alert('清空失败: ' + err.message);
         }

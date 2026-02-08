@@ -69,15 +69,18 @@
     "zod": "^4.3.6"
   },
   "optionalDependencies": {
-    "playwright-core": "^1.58.1",
     "cheerio": "^1.2.0",
     "html-to-text": "^9.0.5",
+    "playwright-core": "^1.58.1",
     "turndown": "^7.2.2"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.10.0",
     "@types/ws": "^8.18.1",
+    "alpinejs": "^3.13.3",
+    "htmx.org": "^1.9.10",
+    "marked": "^15.0.4",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
     "vitest": "^4.0.18"

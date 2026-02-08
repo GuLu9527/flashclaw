@@ -5,9 +5,17 @@
 import { Hono } from 'hono';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { timingSafeEqual, createHash } from 'crypto';
+import { fileURLToPath } from 'url';
+import { dirname, resolve } from 'path';
 import { pagesRoutes } from './routes/pages.js';
 import { apiRoutes } from './routes/api.js';
 import { sseRoutes } from './routes/sse.js';
+
+// 基于模块自身位置计算绝对路径，不依赖 process.cwd()
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+/** 插件根目录（web-ui/） */
+const pluginRoot = resolve(__dirname, '..');
 
 function safeCompare(a: string, b: string): boolean {
   const hashA = createHash('sha256').update(a).digest();
@@ -26,7 +34,7 @@ export function createApp(options: AppOptions = {}) {
   if (options.token) {
     app.use('*', async (c, next) => {
       // 跳过静态资源
-      if (c.req.path.startsWith('/public/') || c.req.path.startsWith('/assets/')) {
+      if (c.req.path.startsWith('/public/')) {
         return next();
       }
 
@@ -55,7 +63,7 @@ export function createApp(options: AppOptions = {}) {
             <main class="auth-container">
               <div class="auth-card">
                 <div class="auth-brand">
-                  <img src="/assets/flashclaw-icon.png" alt="FlashClaw" class="brand-icon">
+                  <img src="/public/flashclaw-icon.svg" alt="FlashClaw" class="brand-icon">
                   <div class="auth-title">FlashClaw Web UI</div>
                 </div>
                 <form method="POST" action="/login" class="auth-form">
@@ -84,9 +92,8 @@ export function createApp(options: AppOptions = {}) {
     });
   }
 
-  // 静态文件
-  app.use('/public/*', serveStatic({ root: './community-plugins/web-ui/' }));
-  app.use('/assets/*', serveStatic({ root: './' }));
+  // 静态文件 — 使用绝对路径，确保无论 CWD 在哪都能正确加载
+  app.use('/public/*', serveStatic({ root: pluginRoot }));
 
   // API 路由
   app.route('/api', apiRoutes);
