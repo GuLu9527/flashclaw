@@ -105,13 +105,25 @@ export const paths = {
 /**
  * Get the built-in plugins directory.
  * Returns the path relative to the current module (../plugins).
- * 
+ *
  * @returns The built-in plugins directory path
  */
 export function getBuiltinPluginsDir(): string {
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = dirname(__filename);
   return join(__dirname, '..', 'plugins');
+}
+
+/**
+ * Get the community plugins directory.
+ * Returns the path relative to the current module (../community-plugins).
+ *
+ * @returns The community plugins directory path
+ */
+export function getCommunityPluginsDir(): string {
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = dirname(__filename);
+  return join(__dirname, '..', 'community-plugins');
 }
 
 /**

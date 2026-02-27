@@ -16,7 +16,7 @@ dotenv.config(); // 项目根目录 .env
 import pino from 'pino';
 import { z } from 'zod';
 
-import { paths, ensureDirectories, getBuiltinPluginsDir } from './paths.js';
+import { paths, ensureDirectories, getBuiltinPluginsDir, getCommunityPluginsDir } from './paths.js';
 import { pluginManager } from './plugins/manager.js';
 import { loadFromDir, watchPlugins, stopWatching } from './plugins/loader.js';
 import { Message, ToolContext } from './plugins/types.js';
@@ -1180,8 +1180,15 @@ ${envExists
     logger.info({ dir: builtinPluginsDir }, '⚡ 加载内置插件');
     await loadFromDir(builtinPluginsDir);
   }
-  
-  // 再加载用户插件（可覆盖内置插件）
+
+  // 再加载社区插件（可选，可覆盖内置插件）
+  const communityPluginsDir = getCommunityPluginsDir();
+  if (fs.existsSync(communityPluginsDir)) {
+    logger.info({ dir: communityPluginsDir }, '⚡ 加载社区插件');
+    await loadFromDir(communityPluginsDir);
+  }
+
+  // 最后加载用户插件（可覆盖内置和社区插件）
   const userPluginsDir = paths.userPlugins();
   if (fs.existsSync(userPluginsDir)) {
     logger.info({ dir: userPluginsDir }, '⚡ 加载用户插件');

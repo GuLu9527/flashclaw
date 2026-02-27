@@ -188,7 +188,6 @@ src/                    # 核心代码（尽量不动）
 └── ...
 
 plugins/                # 内置插件目录
-├── feishu/             # 飞书渠道
 ├── schedule-task/       # 定时任务工具
 ├── list-tasks/         # 查看任务列表
 ├── cancel-task/        # 取消任务
@@ -199,6 +198,7 @@ plugins/                # 内置插件目录
 └── register-group/     # 注册群组
 
 community-plugins/      # 社区/官方扩展插件
+├── feishu/             # 飞书渠道
 ├── hello-world/        # 测试插件
 ├── web-fetch/          # 网页抓取插件
 ├── browser-control/    # 浏览器自动化控制 (Playwright)
