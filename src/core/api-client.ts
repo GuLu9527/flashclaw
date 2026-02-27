@@ -147,12 +147,12 @@ function buildMockMessage(params: {
   stopReason: 'end_turn' | 'tool_use';
   model: string;
 }): Anthropic.Message {
-  const message = {
+  const message: Anthropic.Message = {
     id: `mock-${Date.now()}`,
     type: 'message',
     role: 'assistant',
     model: params.model,
-    content: params.content,
+    content: params.content as Anthropic.Message['content'],
     stop_reason: params.stopReason,
     stop_sequence: null,
     usage: {
@@ -160,7 +160,7 @@ function buildMockMessage(params: {
       output_tokens: 1,
     },
   };
-  return message as unknown as Anthropic.Message;
+  return message;
 }
 
 // ==================== API 客户端实现 ====================
@@ -778,7 +778,9 @@ class MockApiClient extends ApiClient {
   override async handleToolUse(
     response: Anthropic.Message,
     _messages: ChatMessage[],
-    executeTool: ToolExecutor
+    executeTool: ToolExecutor,
+    _options?: ChatOptions,
+    _heartbeat?: HeartbeatCallback
   ): Promise<string> {
     const toolUseBlocks = response.content.filter(
       (block): block is Anthropic.ToolUseBlock => block.type === 'tool_use'

@@ -300,12 +300,16 @@ function getGroupSystemPrompt(group: RegisteredGroup, isMain: boolean, isSchedul
     try {
       soulContent = fs.readFileSync(soulSessionPath, 'utf-8').trim();
       logger.debug({ path: soulSessionPath }, '加载会话级 SOUL.md');
-    } catch { /* ignore read errors */ }
+    } catch (err) {
+      logger.debug({ path: soulSessionPath, err }, '加载会话级 SOUL.md 失败');
+    }
   } else if (fs.existsSync(soulGlobalPath)) {
     try {
       soulContent = fs.readFileSync(soulGlobalPath, 'utf-8').trim();
       logger.debug({ path: soulGlobalPath }, '加载全局 SOUL.md');
-    } catch { /* ignore read errors */ }
+    } catch (err) {
+      logger.debug({ path: soulGlobalPath, err }, '加载全局 SOUL.md 失败');
+    }
   }
   
   // 预计算时间示例，帮助 AI 正确理解 ISO 时间

@@ -441,7 +441,10 @@ export function watchPlugins(
           try {
             await fs.access(pluginPath);
             exists = true;
-          } catch {}
+          } catch {
+            // 文件不存在或无权限，视为已删除
+            exists = false;
+          }
 
           if (exists && isLoaded) {
             // 检查内容是否真的变化了

@@ -73,6 +73,7 @@ export class MessageQueue<T> {
     this.isRunning = false;
     if (this.processInterval) {
       clearInterval(this.processInterval);
+      this.processInterval.unref?.(); // 释放定时器引用
       this.processInterval = null;
     }
     logger.info('Message queue stopped');
