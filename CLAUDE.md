@@ -173,10 +173,14 @@ src/                    # 核心代码（尽量不动）
 ├── plugins/            # 插件系统
 │   ├── loader.ts       # 插件加载器
 │   ├── manager.ts      # 插件管理器
-│   └── types.ts        # 插件类型定义
+│   ├── types.ts        # 插件类型定义
+│   ├── installer.ts    # 插件安装/卸载
+│   └── index.ts        # 插件入口
 ├── core/               # 核心模块
-│   ├── api-client.ts   # AI 客户端
-│   └── memory.ts       # 记忆管理
+│   ├── api-client.ts   # AI 客户端 (Anthropic)
+│   ├── memory.ts       # 记忆管理 (短期+长期+压缩)
+│   ├── context-guard.ts # 上下文窗口保护
+│   └── model-capabilities.ts # 模型能力检测
 ├── utils/              # 工具模块
 │   ├── log-rotate.ts
 │   ├── rate-limiter.ts
@@ -186,14 +190,20 @@ src/                    # 核心代码（尽量不动）
 plugins/                # 内置插件目录
 ├── feishu/             # 飞书渠道
 ├── schedule-task/       # 定时任务工具
+├── list-tasks/         # 查看任务列表
+├── cancel-task/        # 取消任务
+├── pause-task/         # 暂停任务
+├── resume-task/        # 恢复任务
 ├── memory/             # 记忆工具
-└── registry.json       # 可安装插件索引
+├── send-message/       # 发送消息工具
+└── register-group/     # 注册群组
 
 community-plugins/      # 社区/官方扩展插件
 ├── hello-world/        # 测试插件
 ├── web-fetch/          # 网页抓取插件
-├── browser-control/    # 浏览器自动化控制
-└── web-ui/             # Web 管理界面
+├── browser-control/    # 浏览器自动化控制 (Playwright)
+├── web-ui/             # Web 管理界面
+└── telegram/           # Telegram 渠道
 ```
 
 ### 命名约定
@@ -329,3 +339,39 @@ export default plugin;
 5. **中文优先** - 文档和提示使用中文
 6. **提交规范** - Git 提交信息使用英文前缀 + 中文描述
 7. **不提交 TODO.md** - TODO.md 仅供本地参考，不提交到仓库
+
+## 测试覆盖
+
+项目使用 Vitest 框架，主要测试文件：
+
+```
+tests/
+├── agent-runner.test.ts      # Agent 运行器测试
+├── task-scheduler.test.ts    # 任务调度测试
+├── index.test.ts             # 主入口测试
+├── message-queue.test.ts     # 消息队列测试
+├── session-tracker.test.ts   # Token 追踪测试
+├── db.test.ts               # 数据库测试
+├── e2e.test.ts              # 端到端测试
+├── plugins/
+│   ├── loader.test.ts        # 插件加载器测试
+│   ├── manager.test.ts       # 插件管理器测试
+│   ├── installer.test.ts     # 插件安装测试
+│   └── browser-control.test.ts  # 浏览器控制插件测试
+└── core/
+    ├── api-client.test.ts    # API 客户端测试
+    └── memory.test.ts        # 记忆系统测试
+```
+
+运行测试：`npm test`
+
+## 版本历史
+
+| 版本 | 日期 | 变更 |
+|------|------|------|
+| 1.5.0 | 2026-02-27 | 上下文保护、安全审计、后台服务、SOUL.md 人格设定 |
+| 1.4.0 | 2026-02-08 | Telegram 插件支持、插件系统增强、工具调用修复 |
+| 1.3.0 | 2026-02-06 | 全面代码审查修复：竞态条件、内存泄漏、类型安全、依赖瘦身 |
+| 1.2.0 | 2026-02-06 | 新增 init/doctor 命令，安装流程优化，代码审查修复 |
+| 1.1.0 | 2026-02-05 | 同步文档与代码，添加 browser-control、web-ui 插件 |
+| 1.0.0 | 2026-02-03 | 重构为轻量地基 + 插件架构 |
