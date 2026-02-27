@@ -158,6 +158,11 @@ function buildMockMessage(params: {
     usage: {
       input_tokens: 1,
       output_tokens: 1,
+      cache_creation_input_tokens: null,
+      cache_read_input_tokens: null,
+      cache_creation: null,
+      server_tool_use: null,
+      service_tier: 'standard',
     },
   };
   return message;
