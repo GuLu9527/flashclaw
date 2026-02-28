@@ -1,8 +1,8 @@
 # CLI 渠道插件实施文档
 
 > 创建日期: 2026-02-27
-> 状态: 已实现 (整合到 src/cli.ts)
-> 版本: v1.0.0
+> 状态: 待实现 (增强版)
+> 版本: v2.0.0
 
 ---
 
@@ -10,47 +10,66 @@
 
 ### 1.1 目标
 
-为 FlashClaw 添加内置 CLI 终端渠道，确保：
-- 默认安装后用户可以直接进行对话
-- 无需配置第三方渠道（飞书/Telegram）
-- 提供开发调试能力
+为 FlashClaw 实现类似 Claude Code / Codex 的 CLI 对话功能：
 
-### 1.2 背景
+- **持久会话** - 记住对话上下文，多次交互
+- **工具调用** - 可以使用各种工具（browser-control、memory 等）
+- **真正可用的 REPL** - 像正常聊天一样连续对话
 
-- 飞书插件已移至 `community-plugins/`，默认安装没有可用渠道
-- 需要一种默认的交互方式
-- CLI 作为 fallback 和开发调试工具
+### 1.2 对比现状
+
+| 功能 | 当前实现 | 目标实现 |
+|------|----------|----------|
+| 会话持久 | ❌ 每次新建 | ✅ 记住历史 |
+| 工具加载 | ❌ toolCount: 0 | ✅ 完整工具链 |
+| 多轮对话 | ❌ 单次问答 | ✅ 连续对话 |
+| 上下文管理 | ❌ 无 | ✅ memory 集成 |
 
 ### 1.3 架构定位
 
 ```
-FlashClaw 插件架构
+FlashClaw 启动流程 (CLI 模式)
 
-┌─────────────────────────────────────────────┐
-│           CLI 渠道 (内置 fallback)          │
-├─────────────────────────────────────────────┤
-│         社区插件 (可选)                       │
-│    feishu | telegram | browser-control...    │
-├─────────────────────────────────────────────┤
-│      内置工具插件 (核心能力)                   │
-│   schedule-task | memory | send-message...   │
-└─────────────────────────────────────────────┘
+┌─────────────────────────────────────────┐
+│           flashclaw repl               │
+└──────────────────┬──────────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────────┐
+│         1. 初始化配置                    │
+│    - 加载 .env 配置                     │
+│    - 初始化数据库                       │
+└──────────────────┬──────────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────────┐
+│         2. 加载插件系统                 │
+│    - 内置工具插件 (memory, schedule...)  │
+│    - 社区插件 (飞书、telegram 可选)      │
+│    - 注册到 pluginManager               │
+└──────────────────┬──────────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────────┐
+│         3. 初始化 Agent                 │
+│    - 创建 AgentRunner 实例              │
+│    - 加载 memory 上下文                 │
+└──────────────────┬──────────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────────┐
+│         4. 启动 REPL 循环               │
+│    - 等待用户输入                       │
+│    - 调用 Agent + 工具                  │
+│    - 显示响应                           │
+└─────────────────────────────────────────┘
 ```
 
 ---
 
 ## 2. 功能需求
 
-### 2.1 使用场景
-
-| 场景 | 描述 |
-|------|------|
-| 默认交互 | 首次安装，无渠道配置时直接可用 |
-| 开发调试 | 开发时快速测试 prompt 和工具 |
-| CLI 用户 | 偏好终端操作的用户 |
-| 管道输入 | 配合 shell 脚本使用 |
-
-### 2.2 启动方式
+### 2.1 启动方式
 
 ```bash
 # 交互式 REPL（默认）
@@ -67,7 +86,7 @@ flashclaw repl --ask "你好" --group my-group
 flashclaw repl --batch
 ```
 
-### 2.3 REPL 内置命令
+### 2.2 REPL 内置命令
 
 | 命令 | 简写 | 说明 |
 |------|------|------|
@@ -79,7 +98,7 @@ flashclaw repl --batch
 | `/clear` | | 清除终端显示 |
 | `/help` | `/?` | 显示帮助 |
 
-### 2.4 输出效果
+### 2.3 输出效果
 
 ```bash
 ⚡ FlashClaw CLI v1.5.0
@@ -92,6 +111,7 @@ flashclaw repl --batch
 今天天气晴朗，气温20-28°C，适合外出。
 
 > 帮我设置一个明天上午9点的会议提醒
+⚡ [调用工具: schedule_task]
 ✅ 已创建定时任务：明天上午9点会议提醒
 
 > /status
@@ -107,102 +127,83 @@ flashclaw repl --batch
 
 ## 3. 技术方案
 
-### 3.1 文件结构
+### 3.1 核心改动
 
-```
-src/cli.ts             # CLI 命令入口 + REPL 实现
-```
+#### 3.1.1 初始化插件系统
 
-> 注意：CLI REPL 已整合到 `src/cli.ts` 中，作为 FlashClaw CLI 命令的一部分。
-> 不再使用独立的 plugins/cli/ 插件方式。
+当前问题：`runAgent()` 不加载工具
 
-### 3.2 核心接口
+解决：需要先初始化完整的插件系统
 
 ```typescript
-// ==================== 类型定义 ====================
+// 在 REPL 启动前初始化
+async function initForRepl(): Promise<void> {
+  // 1. 加载配置
+  dotenv.config();
 
-/**
- * CLI 渠道选项
- */
-export interface CLIChannelOptions {
-  /** 群组文件夹名称 */
-  group?: string;
-  /** 是否启用流式输出 */
-  streaming?: boolean;
-  /** 是否哑终端模式（无彩色） */
-  batch?: boolean;
-}
+  // 2. 初始化数据库
+  initDatabase();
 
-/**
- * CLI 消息
- */
-export interface CLIMessage {
-  role: 'user' | 'assistant';
-  content: string;
-  timestamp: number;
-}
+  // 3. 加载内置插件
+  const builtinPluginsDir = getBuiltinPluginsDir();
+  await loadFromDir(builtinPluginsDir);
 
-/**
- * CLI 状态
- */
-export interface CLIState {
-  group: string;
-  model: string;
-  messageCount: number;
-  inputTokens: number;
-  outputTokens: number;
+  // 4. 加载社区插件
+  const communityPluginsDir = getCommunityPluginsDir();
+  await loadFromDir(communityPluginsDir);
 }
 ```
 
-### 3.3 插件结构
+#### 3.1.2 会话持久化
+
+使用 memory 管理对话历史：
 
 ```typescript
-import type { ChannelPlugin, MessageHandler } from '../../src/plugins/types.js';
+class CLIRepl {
+  private memoryManager: MemoryManager;
 
-const plugin: ChannelPlugin = {
-  name: 'cli',
-  version: '1.0.0',
-  description: '终端交互渠道 - REPL 模式对话',
+  async callAgent(prompt: string): Promise<void> {
+    // 1. 获取历史上下文
+    const context = this.memoryManager.getContext(this.group);
 
-  async init(config?: CLIChannelOptions) {
-    this.config = config ?? {};
-  },
+    // 2. 调用 Agent（带上下文）
+    const result = await runAgent(this.group, {
+      prompt,
+      history: context.messages,
+    });
 
-  onMessage(handler: MessageHandler) {
-    // CLI 是主动模式，不需要接收外部消息
-    // 但保留接口兼容
-  },
-
-  async start() {
-    // 启动 REPL
-    await this.startRepl();
-  },
-
-  async stop() {
-    // 清理资源
-    this.rl?.close();
-  },
-
-  async sendMessage(chatId: string, content: string) {
-    // 输出消息到终端
-    this.writer.print(content);
+    // 3. 保存到记忆
+    this.memoryManager.remember(this.group, 'user', prompt);
+    this.memoryManager.remember(this.group, 'assistant', result);
   }
-};
-
-export default plugin;
+}
 ```
 
-### 3.4 REPL 流程图
+### 3.2 文件结构
+
+```
+src/
+├── cli.ts                 # CLI 入口
+├── agent-runner.ts        # Agent 运行器 (复用)
+├── core/
+│   ├── memory.ts          # 记忆系统 (复用)
+│   └── api-client.ts      # API 客户端 (复用)
+└── plugins/
+    ├── loader.ts          # 插件加载器 (复用)
+    └── manager.ts         # 插件管理器 (复用)
+```
+
+### 3.3 流程图
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│                      CLI REPL 主流程                       │
+│                    REPL 主流程 (v2)                       │
 └──────────────────────────────────────────────────────────┘
 
-  1. 初始化
+  1. initForRepl()
      │
      ▼
-  2. 创建 readline 接口
+  2. 加载插件系统 (loadFromDir)
      │
      ▼
   3. 打印欢迎信息
@@ -220,13 +221,19 @@ export default plugin;
   │    │       ▼                          │
   │    │    返回 REPL 循环                 │
   │    │                                  │
-  │    └── 消息 ──► 调用 Agent            │
+  │    └── 消息 ──► callAgent            │
   │        │                              │
   │        ▼                              │
-  │    流式响应处理                        │
+  │    获取 memory 上下文                 │
   │        │                              │
   │        ▼                              │
-  │    工具调用处理                        │
+  │    runAgent (已加载工具!)             │
+  │        │                              │
+  │        ▼                              │
+  │    工具调用处理 (browser-control 等)  │
+  │        │                              │
+  │        ▼                              │
+  │    保存到 memory                      │
   │        │                              │
   │        ▼                              │
   │    显示最终回复                        │
@@ -241,506 +248,108 @@ export default plugin;
   7. 清理资源，退出程序
 ```
 
-### 3.5 核心实现
+---
 
-#### 3.5.1 REPL 主循环
+## 4. 实施步骤
 
-```typescript
-// plugins/cli/repl.ts
+### Phase 1: 初始化插件系统
 
-import readline from 'readline';
-import { runAgent, AgentInput } from '../../src/agent-runner.js';
+- [ ] 修改 `src/cli.ts`，在 REPL 启动前初始化插件系统
+- [ ] 调用 `initDatabase()` 初始化数据库
+- [ ] 调用 `loadFromDir()` 加载工具插件
 
-export class REPL {
-  private rl: readline.Interface;
-  private group: string;
-  private batch: boolean;
+### Phase 2: 会话持久化
 
-  constructor(options: CLIChannelOptions) {
-    this.group = options.group ?? 'default';
-    this.batch = options.batch ?? false;
+- [ ] 修改 REPL，集成 memory 管理对话历史
+- [ ] 实现 `/new` 命令真正清除上下文
+- [ ] 实现 `/compact` 命令压缩上下文
 
-    this.rl = readline.createInterface({
-      input: process.stdin,
-      output: process.stdout,
-      terminal: !this.batch,
-      prompt: '> '
-    });
-  }
+### Phase 3: 完善命令
 
-  async start(): Promise<void> {
-    this.printWelcome();
+- [ ] 实现 `/history` 从 memory 获取真实历史
+- [ ] 实现 `/status` 显示更详细的模型信息
 
-    // 设置 Ctrl+C 处理
-    process.on('SIGINT', () => this.handleInterrupt());
+### Phase 4: 测试
 
-    // 开始 REPL 循环
-    for await (const line of this.rl) {
-      await this.handleInput(line.trim());
-    }
-  }
-
-  private async handleInput(input: string): Promise<void> {
-    if (!input) return;
-
-    // 检查内置命令
-    if (input.startsWith('/')) {
-      await this.handleCommand(input);
-      return;
-    }
-
-    // 调用 Agent
-    await this.callAgent(input);
-  }
-
-  private async callAgent(prompt: string): Promise<void> {
-    const input: AgentInput = {
-      prompt,
-      groupFolder: this.group,
-      chatJid: 'cli-session',
-      isMain: true,
-    };
-
-    // 流式调用
-    const result = await runAgent(group, input);
-
-    if (result.status === 'success') {
-      console.log('\n🤖 ' + result.result);
-    } else {
-      console.error('\n❌ 错误:', result.error);
-    }
-  }
-}
-```
-
-#### 3.5.2 命令解析
-
-```typescript
-// plugins/cli/commands.ts
-
-interface CLICommand {
-  name: string;
-  aliases: string[];
-  description: string;
-  execute: (args: string) => Promise<void> | void;
-}
-
-const commands: CLICommand[] = [
-  {
-    name: 'new',
-    aliases: ['n'],
-    description: '新建会话',
-    execute: async () => {
-      // 清除当前上下文
-      memoryManager.clearContext(group);
-      console.log('✅ 已新建会话');
-    }
-  },
-  {
-    name: 'compact',
-    aliases: ['c'],
-    description: '压缩上下文',
-    execute: async () => {
-      // 调用压缩
-      await memoryManager.compact(group, apiClient);
-      console.log('✅ 上下文已压缩');
-    }
-  },
-  {
-    name: 'status',
-    aliases: ['s'],
-    description: '查看状态',
-    execute: async () => {
-      const stats = getSessionStats(group);
-      console.table(stats);
-    }
-  },
-  {
-    name: 'quit',
-    aliases: ['q', 'exit'],
-    description: '退出',
-    execute: () => {
-      process.exit(0);
-    }
-  }
-];
-
-export function parseCommand(input: string): { cmd: string; args: string } | null {
-  if (!input.startsWith('/')) return null;
-
-  const parts = input.slice(1).split(/\s+/);
-  return { cmd: parts[0], args: parts.slice(1).join(' ') };
-}
-```
+- [ ] 测试工具调用（memory, schedule-task 等）
+- [ ] 测试多轮对话上下文保持
+- [ ] 测试管道模式和单次问答模式
 
 ---
 
-## 4. 与现有系统集成
+## 5. 依赖
 
-### 4.1 复用 agent-runner
-
-CLI 渠道直接调用现有的 `agent-runner`：
-
-```typescript
-import { runAgent, getMemoryManager } from '../../src/agent-runner.js';
-import { getApiClient } from '../../src/core/api-client.js';
-
-// 获取必要组件
-const apiClient = getApiClient();
-const memoryManager = getMemoryManager();
-
-// 构建 Agent 输入
-const input = {
-  prompt: userInput,
-  groupFolder: this.group,
-  chatJid: 'cli-session',
-  isMain: true,
-};
-
-// 调用
-const result = await runAgent(group, input);
-```
-
-### 4.2 群组管理
-
-CLI 使用虚拟群组：
-
-| 群组 | 说明 |
-|------|------|
-| `default` | 默认会话 |
-| 用户指定 | `flashclaw repl --group my-project` |
-
-CLI 不需要注册到数据库，作为纯内存会话。
-
----
-
-## 5. CLI 命令注册
-
-### 5.1 命令入口
-
-在 `src/commands/` 中添加：
-
-```typescript
-// src/commands/repl.ts
-
-import { Command } from 'commander';
-import { CLIChannel } from '../plugins/cli/index.js';
-
-export const replCommand = new Command('repl')
-  .description('启动交互式终端对话')
-  .option('-g, --group <name>', '指定群组文件夹')
-  .option('-a, --ask <text>', '单次问答模式')
-  .option('-b, --batch', '哑终端模式（无彩色输出）')
-  .action(async (options) => {
-    const cli = new CLIChannel({
-      group: options.group,
-      batch: options.batch,
-    });
-
-    if (options.ask) {
-      // 单次问答模式
-      await cli.ask(options.ask);
-    } else {
-      // REPL 模式
-      await cli.startRepl();
-    }
-  });
-```
-
-### 5.2 注册到 CLI
-
-```typescript
-// src/commands.ts
-
-import { replCommand } from './commands/repl.js';
-
-export function registerCommands(program: Command) {
-  // ... 其他命令
-  program.addCommand(replCommand);
-}
-```
-
----
-
-## 6. 测试计划
-
-### 6.1 单元测试
-
-| 测试项 | 描述 |
-|--------|------|
-| 命令解析 | `/new`, `/status`, `/quit` 等 |
-| 输入验证 | 空输入、超长输入 |
-| 状态管理 | 群组切换、Token 计数 |
-
-### 6.2 集成测试
-
-| 测试项 | 描述 |
-|--------|------|
-| Agent 对话 | 发送消息，获取回复 |
-| 工具调用 | memory, schedule-task |
-| 流式输出 | 实时显示响应 |
-
-### 6.3 E2E 测试
-
-| 测试项 | 描述 |
-|--------|------|
-| 完整会话 | 新建 → 对话 → 退出 |
-| 管道输入 | `echo "hi" \| flashclaw repl` |
-
----
-
-## 7. 依赖
-
-### 7.1 Node.js 内置
+### 5.1 内部模块复用
 
 | 模块 | 用途 |
 |------|------|
-| `readline` | 终端输入处理 |
-| `process` | 信号处理、退出 |
+| `agent-runner.ts` | AI 对话（已存在） |
+| `memory.ts` | 上下文管理（已存在） |
+| `plugins/loader.ts` | 插件加载（已存在） |
+| `db.ts` | 数据库初始化（已存在） |
 
-### 7.2 项目内复用
+### 5.2 需要传递的配置
 
-| 模块 | 用途 |
-|------|------|
-| `agent-runner` | AI 对话 |
-| `memory` | 上下文管理 |
-| `api-client` | API 调用 |
-
-### 7.3 可选增强
-
-```bash
-# 如需更好体验，可添加
-npm install chalk     # 彩色输出
-npm install inquirer  # 交互式选择
+```typescript
+interface ReplInitOptions {
+  group: string;
+  loadPlugins?: boolean;  // 是否加载插件系统
+}
 ```
 
 ---
 
-## 8. 实施步骤
+## 6. 注意事项
 
-### Phase 1: 基础骨架
+### 6.1 性能考虑
 
-- [ ] 创建 `plugins/cli/` 目录
-- [ ] 创建 `plugin.json`
-- [ ] 实现最小可运行版本
+- 插件系统初始化可能较慢，考虑添加 loading 提示
+- Memory 长期累积需要压缩或清理
 
-### Phase 2: REPL 核心
+### 6.2 错误处理
 
-- [ ] 实现 REPL 循环
-- [ ] 添加内置命令
-- [ ] 流式输出支持
+- API 错误需要友好提示
+- 工具调用失败需要显示错误信息
 
-### Phase 3: 集成
+### 6.3 资源管理
 
-- [ ] 集成 agent-runner
-- [ ] 添加 CLI 命令
-- [ ] 测试调试
-
-### Phase 4: 完善
-
-- [ ] 管道输入模式
-- [ ] 单次问答模式
-- [ ] 完善文档
-
----
-
-## 9. 注意事项
-
-### 9.1 终端兼容性
-
-- 哑终端模式 (`--batch`) 不使用 ANSI 转义
-- 支持基本 ANSI 颜色代码
-- 处理终端宽度自适应
-
-### 9.2 资源管理
-
-- REPL 退出时清理 readline
-- 处理 Ctrl+C 优雅退出
+- REPL 退出时需要清理资源
 - 避免内存泄漏
 
-### 9.3 错误处理
-
-- API 错误提示
-- 网络超时处理
-- 工具调用失败处理
-
 ---
 
-## 10. 后续扩展
+## 7. 预期效果
 
-### 优先级降低
+### 7.1 工具加载
 
-- [ ] 历史记录（上下键导航）
-- [ ] 自动补全（Tab 键）
-- [ ] 配置文件 (`~/.flashclaw/cli.json`)
-- [ ] 主题支持（深色/浅色）
-
-### 可选功能
-
-- [ ] 多语言支持
-- [ ] 插件化命令（如接入外部工具）
-- [ ] 会话保存/恢复
-
----
-
-## 11. 成熟案例参考
-
-### 11.1 项目内部参考
-
-| 模块 | 位置 | 用途 |
-|------|------|------|
-| Agent 流式输出 | `src/agent-runner.ts` | 直接复用 `runAgent()` |
-| 记忆系统 | `src/core/memory.ts` | 上下文管理 |
-| 插件接口 | `src/plugins/types.ts` | 实现 `ChannelPlugin` |
-| 飞书渠道 | `community-plugins/feishu/` | 渠道实现参考 |
-| Telegram 渠道 | `community-plugins/telegram/` | 另一个渠道参考 |
-
-### 11.2 飞书插件重点参考
-
-飞书插件是最佳的内部参考，因为它已经实现了：
-
-```typescript
-// community-plugins/feishu/index.ts
-
-// 1. 消息发送（复用）
-async sendMessage(chatId: string, content: string): Promise<SendMessageResult> {
-  // 发送富文本消息
-}
-
-// 2. 思考提示（可借鉴）
-// 使用 setTimeout 显示 "正在思考..."
-
-// 3. 流式输出（可借鉴）
-// 打字机效果
+```
+> 你好
+[10:09:20.757] INFO ⚡ 可用工具列表
+    toolCount: 8
+    toolNames: ["memory_remember", "memory_recall", "schedule_task", "list_tasks", ...]
 ```
 
-### 11.3 外部参考项目
+### 7.2 工具调用
 
-| 项目 | GitHub | 特点 |
-|------|--------|------|
-| **ChatGPT Desktop** | [lencx/ChatGPT](https://github.com/lencx/ChatGPT) | 跨平台桌面端 |
-| **ChuanhuChatbot** | [GaiZhenbiao/ChuanhuChatbot](https://github.com/GaiZhenbiao/ChuanhuChatbot) | 中文友好，功能丰富 |
-| **Chatbot UI** | [mckaywrigley/chatbot-ui](https://github.com/mckaywrigley/chatbot-ui) | 开源 UI 模板 |
-| **Inquirer.js** | [SBoudrias/Inquirer.js](https://github.com/SBoudrias/Inquirer.js) | 交互式 CLI 组件 |
-| **Chalk** | [chalk/chalk](https://github.com/chalk/chalk) | 终端彩色输出 |
-
-### 11.4 Node.js 官方 API
-
-| API | 用途 |
-|-----|------|
-| [readline](https://nodejs.org/api/readline.html) | 终端输入处理 |
-| [readline.createInterface()](https://nodejs.org/api/readline.html#readlinecreateinterfaceoptions) | 创建 REPL |
-| [process.stdin](https://nodejs.org/api/process.html#processstdin) | 标准输入 |
-| [process.stdout](https://nodejs.org/api/process.html#processstdout) | 标准输出 |
-| [readline.emitKeypressEvents()](https://nodejs.org/api/readline.html#readlineemitkeypresseventsstream-interface) | 键盘事件 |
-
----
-
-## 附录
-
-### A. 相关文件参考
-
-| 文件 | 用途 |
-|------|------|
-| `src/agent-runner.ts` | Agent 运行器 |
-| `src/plugins/types.ts` | 插件类型定义 |
-| `community-plugins/feishu/` | 渠道参考 |
-| `community-plugins/telegram/` | 另一个渠道参考 |
-
-### B. 参考项目
-
-- [Node.js REPL](https://nodejs.org/api/repl.html) - 内置 REPL 文档
-- [Inquirer.js](https://github.com/SBoudrias/Inquirer.js) - 交互式 CLI
-- [Chalk](https://github.com/chalk/chalk) - 终端彩色输出
-
-### 11.5 最小实现示例
-
-基于现有代码风格，CLI 渠道最小实现：
-
-```typescript
-// plugins/cli/index.ts
-
-import readline from 'readline';
-import { ChannelPlugin, MessageHandler, SendMessageResult } from '../../src/plugins/types.js';
-import { runAgent } from '../../src/agent-runner.js';
-import { getMemoryManager } from '../../src/core/memory.js';
-
-const plugin: ChannelPlugin = {
-  name: 'cli',
-  version: '1.0.0',
-  description: '终端交互渠道',
-
-  onMessage(_handler: MessageHandler) {
-    // CLI 主动模式，不需要接收外部消息
-  },
-
-  async start() {
-    await this.startRepl();
-  },
-
-  async stop() {
-    this.rl?.close();
-  },
-
-  async sendMessage(_chatId: string, content: string): Promise<SendMessageResult> {
-    // 输出到终端
-    console.log(content);
-    return { success: true };
-  },
-
-  private async startRepl() {
-    const rl = readline.createInterface({
-      input: process.stdin,
-      output: process.stdout,
-      prompt: '> '
-    });
-
-    this.rl = rl;
-
-    rl.prompt();
-
-    rl.on('line', async (line) => {
-      const input = line.trim();
-      if (!input) {
-        rl.prompt();
-        return;
-      }
-
-      // 调用 Agent
-      const result = await this.callAgent(input);
-
-      if (result.success) {
-        console.log('\n🤖 ' + result.result);
-      } else {
-        console.error('\n❌ ' + result.error);
-      }
-
-      rl.prompt();
-    });
-  },
-
-  private async callAgent(prompt: string) {
-    const memoryManager = getMemoryManager();
-    const group = 'cli-default';
-
-    // 复用 agent-runner
-    const result = await runAgent(
-      { name: group, folder: group, agentConfig: {} },
-      { prompt, groupFolder: group, chatJid: 'cli', isMain: true }
-    );
-
-    return {
-      success: result.status === 'success',
-      result: result.result ?? '',
-      error: result.error
-    };
-  }
-};
-
-export default plugin;
+```
+> 帮我设置一个明天上午9点的提醒
+⚡ [调用工具: schedule_task]
+⚡ [工具参数: {"time": "2026-02-28T09:00:00", "content": "提醒"}]
+✅ 已创建定时任务：明天上午9点提醒
 ```
 
-这个最小实现只有约 60 行代码，可以直接运行！
+### 7.3 会话持久
+
+```
+> 你记住我的名字了吗
+我还没有记住你的名字，请告诉我。
+
+> 我叫张三
+好的，张三，我记住了！
+
+> 我叫什么？
+你叫张三！
+```
 
 ---
 
@@ -748,4 +357,5 @@ export default plugin;
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| v2.0.0 | 2026-02-28 | 增强版：持久会话 + 工具调用 |
 | v1.0.0 | 2026-02-27 | 初始版本 |
