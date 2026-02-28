@@ -4,6 +4,24 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，
 并遵循 [语义化版本](https://semver.org/spec/v2.0.0.html)。
 
+## [1.6.0] - 2026-02-28
+
+### 新增
+- **CLI 渠道插件** (`plugins/cli-channel`)：新增终端交互渠道，支持从任意终端连接到运行中的服务
+  - HTTP API 客户端模式（类似 web-ui）
+  - 命令支持：`/status` 查看状态、`/history` 查看历史、`/new` 新建会话、`/clear` 清屏
+  - 上下键浏览历史记录，Tab 键自动补全命令
+  - 实时显示 AI 工具调用（黄色高亮 `[TOOL:{...}]` 格式）
+- Agent 支持 `onToolUse` 回调，追踪工具调用事件
+
+### 改进
+- 移除未使用的 repl 相关代码，简化代码结构
+- web-ui 工具调用事件流式输出格式优化
+
+### 修复
+- 修复 TypeScript read-only 属性访问问题（`rl.line` / `rl.cursor`）
+- 修复 `rl.completer` 类型定义问题
+
 ## [1.5.1] - 2026-02-08
 
 ### 修复
