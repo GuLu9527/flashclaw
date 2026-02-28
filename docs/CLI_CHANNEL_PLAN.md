@@ -1,7 +1,7 @@
 # CLI 渠道插件实施文档
 
 > 创建日期: 2026-02-27
-> 状态: 设计阶段
+> 状态: 已实现 (整合到 src/cli.ts)
 > 版本: v1.0.0
 
 ---
@@ -110,14 +110,11 @@ flashclaw repl --batch
 ### 3.1 文件结构
 
 ```
-plugins/cli/
-├── plugin.json          # 插件清单
-├── index.ts            # 入口文件
-├── repl.ts            # REPL 主逻辑
-├── reader.ts          # 输入处理
-├── writer.ts          # 输出格式化
-└── types.ts           # 类型定义
+src/cli.ts             # CLI 命令入口 + REPL 实现
 ```
+
+> 注意：CLI REPL 已整合到 `src/cli.ts` 中，作为 FlashClaw CLI 命令的一部分。
+> 不再使用独立的 plugins/cli/ 插件方式。
 
 ### 3.2 核心接口
 
