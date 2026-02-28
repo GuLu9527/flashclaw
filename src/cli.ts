@@ -576,12 +576,18 @@ async function main(): Promise<void> {
 // ==================== REPL 功能 ====================
 
 import readline from 'readline';
+import * as fs from 'fs';
+import dotenv from 'dotenv';
 import { runAgent, AgentInput } from './agent-runner.js';
+import { getBuiltinPluginsDir, getCommunityPluginsDir, paths } from './paths.js';
+import { loadFromDir } from './plugins/loader.js';
+import { initDatabase } from './db.js';
 
 interface ReplOptions {
   group?: string;
   batch?: boolean;
   ask?: string;
+  loadPlugins?: boolean;
 }
 
 interface ReplState {
@@ -592,7 +598,36 @@ interface ReplState {
   batch: boolean;
 }
 
+// 初始化 REPL 环境（插件系统等）
+async function initReplEnv(): Promise<void> {
+  // 加载环境变量
+  dotenv.config();
+
+  // 初始化数据库
+  initDatabase();
+
+  // 加载内置插件
+  const builtinPluginsDir = getBuiltinPluginsDir();
+  if (fs.existsSync(builtinPluginsDir)) {
+    await loadFromDir(builtinPluginsDir);
+  }
+
+  // 加载社区插件
+  const communityPluginsDir = getCommunityPluginsDir();
+  if (fs.existsSync(communityPluginsDir)) {
+    await loadFromDir(communityPluginsDir);
+  }
+}
+
 async function runRepl(options: ReplOptions): Promise<void> {
+  // 初始化插件系统
+  if (options.loadPlugins !== false) {
+    if (!options.batch) {
+      console.log('⚡ 初始化 CLI 环境...\n');
+    }
+    await initReplEnv();
+  }
+
   const state: ReplState = {
     messageCount: 0,
     inputTokens: 0,
