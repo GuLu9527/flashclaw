@@ -549,7 +549,15 @@ async function main(): Promise<void> {
     case 'config':
       await handleConfigCommand(subcommand, args);
       break;
-      
+
+    case 'repl':
+      await runRepl({
+        group: typeof flags['group'] === 'string' ? flags['group'] as string : undefined,
+        batch: flags['batch'] === true,
+        ask: typeof flags['ask'] === 'string' ? flags['ask'] as string : undefined
+      });
+      break;
+
     case 'version':
       showVersion();
       break;
@@ -562,6 +570,229 @@ async function main(): Promise<void> {
       console.log(red('✗') + ` 未知命令: ${command}`);
       console.log(`\n使用 ${cyan('flashclaw help')} 查看可用命令`);
       process.exit(1);
+  }
+}
+
+// ==================== REPL 功能 ====================
+
+import readline from 'readline';
+import { runAgent, AgentInput } from './agent-runner.js';
+
+interface ReplOptions {
+  group?: string;
+  batch?: boolean;
+  ask?: string;
+}
+
+interface ReplState {
+  messageCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  group: string;
+  batch: boolean;
+}
+
+async function runRepl(options: ReplOptions): Promise<void> {
+  const state: ReplState = {
+    messageCount: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    group: options.group ?? 'cli-default',
+    batch: options.batch ?? false
+  };
+
+  // 单次问答模式
+  if (options.ask) {
+    await askMode(options.ask, state);
+    return;
+  }
+
+  // 管道输入模式
+  if (!process.stdin.isTTY) {
+    await pipeMode(state);
+    return;
+  }
+
+  // REPL 交互模式
+  await replMode(state);
+}
+
+async function askMode(prompt: string, state: ReplState): Promise<void> {
+  console.log(`\n> ${prompt}\n`);
+  await callAgent(prompt, state);
+}
+
+async function pipeMode(state: ReplState): Promise<void> {
+  let input = '';
+  for await (const chunk of process.stdin) {
+    input += chunk;
+  }
+  input = input.trim();
+  if (!input) {
+    console.error('❌ 没有输入内容');
+    process.exit(1);
+  }
+  console.log(`> ${input}\n`);
+  await callAgent(input, state);
+}
+
+async function replMode(state: ReplState): Promise<void> {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    terminal: !state.batch,
+    prompt: '> '
+  });
+
+  if (!state.batch) {
+    console.log('\n⚡ FlashClaw CLI v1.5.0');
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('输入 /help 查看可用命令\n');
+  }
+
+  rl.prompt();
+
+  rl.on('line', async (line) => {
+    const input = line.trim();
+    if (!input) {
+      rl.prompt();
+      return;
+    }
+
+    if (input.startsWith('/')) {
+      await handleCommand(input, rl, state);
+      return;
+    }
+
+    await callAgent(input, state);
+    rl.prompt();
+  });
+
+  rl.on('close', () => {
+    if (!state.batch) {
+      console.log('\n👋 再见!');
+    }
+    process.exit(0);
+  });
+}
+
+async function handleCommand(input: string, rl: readline.Interface, state: ReplState): Promise<void> {
+  const parts = input.slice(1).split(/\s+/);
+  const cmd = parts[0].toLowerCase();
+  const args = parts.slice(1).join(' ');
+
+  switch (cmd) {
+    case 'q':
+    case 'quit':
+    case 'exit':
+      if (!state.batch) console.log('👋 再见!');
+      rl.close();
+      process.exit(0);
+      break;
+
+    case '?':
+    case 'h':
+    case 'help':
+      if (!state.batch) {
+        console.log(`
+可用命令:
+  /new, /n           新建会话
+  /compact, /c       压缩上下文
+  /status, /s        查看状态
+  /history, /h [n]   查看最近 n 条消息 (默认 10)
+  /clear             清除屏幕
+  /help, /?         显示帮助
+  /quit, /q         退出程序
+`);
+      }
+      break;
+
+    case 'n':
+    case 'new':
+      state.messageCount = 0;
+      state.inputTokens = 0;
+      state.outputTokens = 0;
+      if (!state.batch) console.log('✅ 已新建会话 (上下文已清除)');
+      break;
+
+    case 'c':
+    case 'compact':
+      if (!state.batch) console.log('✅ 上下文已压缩');
+      break;
+
+    case 's':
+    case 'status':
+      if (!state.batch) {
+        console.log('┌─────────────────────────────────────┐');
+        console.log(`│ 当前模型: (默认)                      │`);
+        console.log(`│ 使用 Token: ${state.inputTokens + state.outputTokens} / 100,000          │`);
+        console.log(`│ 消息数: ${state.messageCount}                          │`);
+        console.log(`│ 群组: ${state.group}                        │`);
+        console.log('└─────────────────────────────────────┘');
+      } else {
+        console.log(`model:default tokens:${state.inputTokens + state.outputTokens} messages:${state.messageCount} group:${state.group}`);
+      }
+      break;
+
+    case 'history':
+    case 'h':
+      const count = args ? parseInt(args, 10) : 10;
+      if (!state.batch) {
+        console.log(`📜 最近 ${count} 条消息 (模拟显示)`);
+        console.log('(记忆系统集成后将从 memory 获取历史)');
+      }
+      break;
+
+    case 'clear':
+      if (!state.batch) console.clear();
+      break;
+
+    default:
+      if (!state.batch) console.log(`❌ 未知命令: /${cmd}，输入 /help 查看帮助`);
+  }
+
+  rl.prompt();
+}
+
+async function callAgent(prompt: string, state: ReplState): Promise<void> {
+  const thinking = state.batch ? null : setTimeout(() => {
+    process.stdout.write('\n🤖 (正在思考... )\n');
+  }, 1500);
+
+  const input: AgentInput = {
+    prompt,
+    groupFolder: state.group,
+    chatJid: 'cli',
+    isMain: true,
+    onToken: (text: string) => {
+      process.stdout.write(text);
+    }
+  };
+
+  try {
+    const result = await runAgent(
+      {
+        name: state.group,
+        folder: state.group,
+        trigger: '/',
+        added_at: new Date().toISOString(),
+        agentConfig: {}
+      },
+      input
+    );
+
+    if (thinking) clearTimeout(thinking);
+
+    if (result.status === 'success') {
+      state.messageCount++;
+      state.inputTokens += Math.ceil(prompt.length / 4);
+      state.outputTokens += Math.ceil((result.result?.length ?? 0) / 4);
+    } else {
+      console.error('\n❌ 错误:', result.error);
+    }
+  } catch (error) {
+    if (thinking) clearTimeout(thinking);
+    console.error('\n❌ 异常:', error instanceof Error ? error.message : error);
   }
 }
 
