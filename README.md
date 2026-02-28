@@ -46,6 +46,7 @@ flashclaw doctor
 |------|------|
 | `flashclaw` | 启动服务（默认） |
 | `flashclaw start` | 启动服务 |
+| `flashclaw cli` | 终端对话渠道（连接服务） |
 | `flashclaw init` | 交互式初始化配置 |
 | `flashclaw doctor` | 检查运行环境 |
 | `flashclaw security` | 安全审计（检查配置和环境安全隐患） |

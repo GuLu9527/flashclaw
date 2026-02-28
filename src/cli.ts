@@ -25,6 +25,7 @@ const colors = {
   yellow: '\x1b[33m',
   red: '\x1b[31m',
   cyan: '\x1b[36m',
+  gray: '\x1b[90m',
   reset: '\x1b[0m',
   bold: '\x1b[1m',
   dim: '\x1b[2m',
@@ -35,6 +36,7 @@ const green = (text: string) => `${colors.green}${text}${colors.reset}`;
 const yellow = (text: string) => `${colors.yellow}${text}${colors.reset}`;
 const red = (text: string) => `${colors.red}${text}${colors.reset}`;
 const cyan = (text: string) => `${colors.cyan}${text}${colors.reset}`;
+const gray = (text: string) => `${colors.gray}${text}${colors.reset}`;
 const bold = (text: string) => `${colors.bold}${text}${colors.reset}`;
 const dim = (text: string) => `${colors.dim}${text}${colors.reset}`;
 
@@ -88,6 +90,7 @@ ${bold('用法:')}
 
 ${bold('命令:')}
   ${cyan('start')}                       启动服务
+  ${cyan('cli')}                         终端对话渠道（连接服务）
   ${cyan('plugins list')}                列出已安装插件
   ${cyan('plugins list --available')}    列出可用插件
   ${cyan('plugins install <name>')}      安装插件
@@ -550,11 +553,10 @@ async function main(): Promise<void> {
       await handleConfigCommand(subcommand, args);
       break;
 
-    case 'repl':
-      await runRepl({
+    case 'cli':
+      await runCli({
         group: typeof flags['group'] === 'string' ? flags['group'] as string : undefined,
-        batch: flags['batch'] === true,
-        ask: typeof flags['ask'] === 'string' ? flags['ask'] as string : undefined
+        url: typeof flags['url'] === 'string' ? flags['url'] as string : undefined
       });
       break;
 
@@ -573,120 +575,115 @@ async function main(): Promise<void> {
   }
 }
 
-// ==================== REPL 功能 ====================
+// ==================== CLI 渠道客户端 ====================
 
 import readline from 'readline';
 import * as fs from 'fs';
-import dotenv from 'dotenv';
-import { runAgent, AgentInput } from './agent-runner.js';
-import { getBuiltinPluginsDir, getCommunityPluginsDir, paths } from './paths.js';
-import { loadFromDir } from './plugins/loader.js';
-import { initDatabase } from './db.js';
-import { getMemoryManager } from './core/memory.js';
 
-interface ReplOptions {
+
+// ==================== CLI 渠道客户端 ====================
+
+interface CliOptions {
   group?: string;
-  batch?: boolean;
-  ask?: string;
-  loadPlugins?: boolean;
+  url?: string;
 }
 
-interface ReplState {
-  messageCount: number;
-  inputTokens: number;
-  outputTokens: number;
-  group: string;
-  batch: boolean;
-  memoryManager: ReturnType<typeof getMemoryManager>;
-}
+const DEFAULT_API_URL = 'http://127.0.0.1:3000';
+const MAX_RETRIES = 3;
+const RETRY_DELAY = 1000;
 
-// 初始化 REPL 环境（插件系统等）
-async function initReplEnv(): Promise<void> {
-  // 加载环境变量
-  dotenv.config();
+// 带重试的 fetch
+async function fetchWithRetry(
+  url: string,
+  options?: RequestInit,
+  retries = MAX_RETRIES
+): Promise<Response> {
+  let lastError: Error | null = null;
 
-  // 初始化数据库
-  initDatabase();
-
-  // 加载内置插件
-  const builtinPluginsDir = getBuiltinPluginsDir();
-  if (fs.existsSync(builtinPluginsDir)) {
-    await loadFromDir(builtinPluginsDir);
-  }
-
-  // 加载社区插件
-  const communityPluginsDir = getCommunityPluginsDir();
-  if (fs.existsSync(communityPluginsDir)) {
-    await loadFromDir(communityPluginsDir);
-  }
-}
-
-async function runRepl(options: ReplOptions): Promise<void> {
-  // 初始化插件系统
-  if (options.loadPlugins !== false) {
-    if (!options.batch) {
-      console.log('⚡ 初始化 CLI 环境...\n');
+  for (let i = 0; i < retries; i++) {
+    try {
+      const response = await fetch(url, options);
+      return response;
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      if (i < retries - 1) {
+        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY * (i + 1)));
+      }
     }
-    await initReplEnv();
   }
-
-  const state: ReplState = {
-    messageCount: 0,
-    inputTokens: 0,
-    outputTokens: 0,
-    group: options.group ?? 'cli-default',
-    batch: options.batch ?? false,
-    memoryManager: getMemoryManager()
-  };
-
-  // 单次问答模式
-  if (options.ask) {
-    await askMode(options.ask, state);
-    return;
-  }
-
-  // 管道输入模式
-  if (!process.stdin.isTTY) {
-    await pipeMode(state);
-    return;
-  }
-
-  // REPL 交互模式
-  await replMode(state);
+  throw lastError;
 }
 
-async function askMode(prompt: string, state: ReplState): Promise<void> {
-  console.log(`\n> ${prompt}\n`);
-  await callAgent(prompt, state);
-}
+async function runCli(options: CliOptions): Promise<void> {
+  const apiUrl = options.url || DEFAULT_API_URL;
+  const group = options.group || 'main';
 
-async function pipeMode(state: ReplState): Promise<void> {
-  let input = '';
-  for await (const chunk of process.stdin) {
-    input += chunk;
-  }
-  input = input.trim();
-  if (!input) {
-    console.error('❌ 没有输入内容');
+  // 检查服务是否运行（启动时检查，不重试）
+  try {
+    const statusRes = await fetch(`${apiUrl}/api/status`);
+    if (!statusRes.ok) {
+      throw new Error('服务响应异常');
+    }
+    const status = await statusRes.json() as { running?: boolean };
+    if (!status.running) {
+      console.error(red('✗') + ' 服务未运行');
+      console.log(`请先运行 ${cyan('flashclaw start')} 启动服务`);
+      process.exit(1);
+    }
+  } catch (err) {
+    console.error(red('✗') + ' 无法连接到服务');
+    console.log(`请确认服务已启动: ${cyan('flashclaw start')}`);
+    console.log(`或者使用 ${cyan('--url')} 指定服务地址`);
     process.exit(1);
   }
-  console.log(`> ${input}\n`);
-  await callAgent(input, state);
-}
 
-async function replMode(state: ReplState): Promise<void> {
+  console.log(`\n${green('⚡ FlashClaw CLI')} - 终端对话渠道`);
+  console.log(`${dim('━'.repeat(44))}`);
+  console.log(`  ${dim('服务:')} ${apiUrl}`);
+  console.log(`  ${dim('群组:')} ${group}`);
+  console.log(`  ${dim('命令:')} /help 查看帮助\n`);
+
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
-    terminal: !state.batch,
-    prompt: '> '
+    terminal: true,
+    prompt: '\n> '
   });
 
-  if (!state.batch) {
-    console.log('\n⚡ FlashClaw CLI v1.5.0');
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    console.log('输入 /help 查看可用命令\n');
-  }
+  // 命令历史
+  const history: string[] = [];
+  let historyIndex = -1;
+
+  // 支持的命令列表
+  const commands = ['/quit', '/q', '/exit', '/e', '/clear', '/c', '/status', '/s', '/history', '/h', '/new', '/n', '/help', '/?'];
+
+  // Tab 补全
+  (rl as unknown as { completer: (line: string) => [string[], string] }).completer = (line: string) => {
+    const hits = commands.filter(cmd => cmd.startsWith(line));
+    return [hits.length > 0 ? hits : commands, line];
+  };
+
+  // 上下键历史导航
+  rl.on('keypress', (str, key) => {
+    const r = rl as unknown as { line: string; cursor: number };
+    if (key.name === 'up') {
+      if (historyIndex < history.length - 1) {
+        historyIndex++;
+        r.line = history[history.length - 1 - historyIndex] || '';
+        r.cursor = r.line.length;
+      }
+    } else if (key.name === 'down') {
+      if (historyIndex > 0) {
+        historyIndex--;
+        r.line = history[history.length - 1 - historyIndex] || '';
+        r.cursor = r.line.length;
+      } else if (historyIndex === 0) {
+        historyIndex = -1;
+        r.line = '';
+        r.cursor = 0;
+      }
+    }
+  });
 
   rl.prompt();
 
@@ -697,151 +694,174 @@ async function replMode(state: ReplState): Promise<void> {
       return;
     }
 
-    if (input.startsWith('/')) {
-      await handleCommand(input, rl, state);
+    // 添加到历史（忽略重复的最后一条）
+    if (history[history.length - 1] !== input) {
+      history.push(input);
+    }
+    historyIndex = -1;
+
+    if (input === '/quit' || input === '/q' || input === '/exit' || input === '/e') {
+      console.log(green('👋 再见!'));
+      rl.close();
+      process.exit(0);
       return;
     }
 
-    await callAgent(input, state);
+    if (input === '/new' || input === '/n') {
+      try {
+        const clearRes = await fetchWithRetry(`${apiUrl}/api/chat/clear`, { method: 'POST' });
+        console.log(green('✅') + ' 已新建会话');
+      } catch {
+        console.log(green('✅') + ' 会话已重置');
+      }
+      rl.prompt();
+      return;
+    }
+
+    if (input === '/clear' || input === '/c') {
+      console.clear();
+      console.log(`\n${green('⚡ FlashClaw CLI')} - 终端对话渠道`);
+      console.log('━'.repeat(40));
+      rl.prompt();
+      return;
+    }
+
+    if (input === '/status' || input === '/s') {
+      try {
+        const statusRes = await fetchWithRetry(`${apiUrl}/api/status`);
+        const status = await statusRes.json() as {
+          running?: boolean;
+          uptime?: string;
+          messageCount?: number;
+          activeSessions?: number;
+          activeTaskCount?: number;
+          totalTaskCount?: number;
+        };
+        console.log(`
+┌─────────────────────────────────────┐
+│ 状态信息                              │
+├─────────────────────────────────────┤
+│ 运行时间: ${status.uptime || '-'}               │
+│ 消息总数: ${status.messageCount || 0}                      │
+│ 活跃会话: ${status.activeSessions || 0}                      │
+│ 活跃任务: ${status.activeTaskCount || 0}/${status.totalTaskCount || 0}                       │
+│ 群组: ${group}                          │
+└─────────────────────────────────────┘
+`);
+      } catch (err) {
+        console.error(red('❌') + ' 获取状态失败');
+      }
+      rl.prompt();
+      return;
+    }
+
+    if (input === '/history' || input === '/h') {
+      try {
+        const historyRes = await fetchWithRetry(`${apiUrl}/api/chat/history?group=${group}`);
+        const data = await historyRes.json() as {
+          success?: boolean;
+          messages?: Array<{ role: string; content: string; time?: string }>;
+        };
+        if (data.success && data.messages && data.messages.length > 0) {
+          console.log(`\n📜 最近 ${data.messages.length} 条消息:\n`);
+          const recentMessages = data.messages.slice(-10).reverse();
+          for (const msg of recentMessages) {
+            const roleLabel = msg.role === 'user' ? '👤 你' : '🤖 AI';
+            const timeStr = msg.time ? msg.time.split('T')[1]?.split('.')[0] || '' : '';
+            const content = msg.content.length > 80 ? msg.content.slice(0, 80) + '...' : msg.content;
+            console.log(`${dim(timeStr)} ${roleLabel}: ${content}\n`);
+          }
+        } else {
+          console.log(gray('暂无消息历史'));
+        }
+      } catch (err) {
+        console.error(red('❌') + ' 获取历史失败');
+      }
+      rl.prompt();
+      return;
+    }
+
+    if (input.startsWith('/')) {
+      console.log(`
+${dim('可用命令:')}
+  ${cyan('/quit')} 或 ${cyan('/q')}    退出程序
+  ${cyan('/clear')} 或 ${cyan('/c')}   清除屏幕
+  ${cyan('/status')} 或 ${cyan('/s')}    查看状态
+  ${cyan('/history')} 或 ${cyan('/h')}   查看历史
+  ${cyan('/new')} 或 ${cyan('/n')}     新建会话
+`);
+      rl.prompt();
+      return;
+    }
+
+    // 发送消息到服务
+    console.log();
+    process.stdout.write(gray('(正在思考... ) '));
+
+    try {
+      const response = await fetchWithRetry(`${apiUrl}/api/chat/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: input, group })
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      if (!response.body) {
+        throw new Error('No response body');
+      }
+
+      // 流式读取响应
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let responseText = '';
+      let inToolCall = false;
+      let toolBuffer = '';
+
+      // 清除 "正在思考" 提示
+      process.stdout.write('\r' + ' '.repeat(30) + '\r');
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+
+        // 检查工具调用格式: [TOOL:{"name":"xxx","input":{}}]
+        const toolMatch = chunk.match(/\[TOOL:({.*?})\]/);
+        if (toolMatch) {
+          try {
+            const toolInfo = JSON.parse(toolMatch[1]);
+            console.log(`\n${yellow('🔧')} 调用工具: ${cyan(toolInfo.name)}`);
+            if (toolInfo.input && Object.keys(toolInfo.input).length > 0) {
+              console.log(`${dim('  参数:')} ${JSON.stringify(toolInfo.input).slice(0, 100)}`);
+            }
+            // 不输出原始工具标记
+            responseText += chunk.replace(/\[TOOL:.*?\]/g, '');
+            continue;
+          } catch {
+            // 解析失败，输出原始内容
+          }
+        }
+
+        responseText += chunk;
+        process.stdout.write(chunk);
+      }
+
+      console.log('\n');
+    } catch (err) {
+      // 清除 "正在思考" 提示
+      process.stdout.write('\r' + ' '.repeat(30) + '\r');
+      console.error(red('❌') + ` 错误: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
     rl.prompt();
   });
 
   rl.on('close', () => {
-    if (!state.batch) {
-      console.log('\n👋 再见!');
-    }
     process.exit(0);
   });
-}
-
-async function handleCommand(input: string, rl: readline.Interface, state: ReplState): Promise<void> {
-  const parts = input.slice(1).split(/\s+/);
-  const cmd = parts[0].toLowerCase();
-  const args = parts.slice(1).join(' ');
-
-  switch (cmd) {
-    case 'q':
-    case 'quit':
-    case 'exit':
-      if (!state.batch) console.log('👋 再见!');
-      rl.close();
-      process.exit(0);
-      break;
-
-    case '?':
-    case 'h':
-    case 'help':
-      if (!state.batch) {
-        console.log(`
-可用命令:
-  /new, /n           新建会话
-  /compact, /c       压缩上下文
-  /status, /s        查看状态
-  /history, /h [n]   查看最近 n 条消息 (默认 10)
-  /clear             清除屏幕
-  /help, /?         显示帮助
-  /quit, /q         退出程序
-`);
-      }
-      break;
-
-    case 'n':
-    case 'new':
-      state.messageCount = 0;
-      state.inputTokens = 0;
-      state.outputTokens = 0;
-      // 清除 memory 上下文
-      state.memoryManager.clearContext(state.group);
-      if (!state.batch) console.log('✅ 已新建会话 (上下文已清除)');
-      break;
-
-    case 'c':
-    case 'compact':
-      // 注意：compact 需要 apiClient 参数，这里只做提示
-      // 实际压缩需要在有 API 客户端时调用
-      if (!state.batch) {
-        console.log('ℹ️ 上下文压缩需要 API 客户端，当前跳过');
-        console.log('✅ 上下文状态正常');
-      }
-      break;
-
-    case 's':
-    case 'status':
-      if (!state.batch) {
-        const memoryKeys = state.memoryManager.getMemoryKeys(state.group);
-        console.log('┌─────────────────────────────────────┐');
-        console.log(`│ 当前模型: (默认)                      │`);
-        console.log(`│ 使用 Token: ${state.inputTokens + state.outputTokens} / 100,000          │`);
-        console.log(`│ 消息数: ${state.messageCount}                          │`);
-        console.log(`│ 群组: ${state.group}                        │`);
-        console.log(`│ 记忆键: ${memoryKeys.length}                          │`);
-        console.log('└─────────────────────────────────────┘');
-      } else {
-        const memoryKeys = state.memoryManager.getMemoryKeys(state.group);
-        console.log(`model:default tokens:${state.inputTokens + state.outputTokens} messages:${state.messageCount} group:${state.group} memory_keys:${memoryKeys.length}`);
-      }
-      break;
-
-    case 'history':
-    case 'h':
-      const count = args ? parseInt(args, 10) : 10;
-      if (!state.batch) {
-        console.log(`📜 最近 ${count} 条消息 (模拟显示)`);
-        console.log('(记忆系统集成后将从 memory 获取历史)');
-      }
-      break;
-
-    case 'clear':
-      if (!state.batch) console.clear();
-      break;
-
-    default:
-      if (!state.batch) console.log(`❌ 未知命令: /${cmd}，输入 /help 查看帮助`);
-  }
-
-  rl.prompt();
-}
-
-async function callAgent(prompt: string, state: ReplState): Promise<void> {
-  const thinking = state.batch ? null : setTimeout(() => {
-    process.stdout.write('\n🤖 (正在思考... )\n');
-  }, 1500);
-
-  const input: AgentInput = {
-    prompt,
-    groupFolder: state.group,
-    chatJid: 'cli',
-    isMain: true,
-    onToken: (text: string) => {
-      process.stdout.write(text);
-    }
-  };
-
-  try {
-    const result = await runAgent(
-      {
-        name: state.group,
-        folder: state.group,
-        trigger: '/',
-        added_at: new Date().toISOString(),
-        agentConfig: {}
-      },
-      input
-    );
-
-    if (thinking) clearTimeout(thinking);
-
-    if (result.status === 'success') {
-      state.messageCount++;
-      state.inputTokens += Math.ceil(prompt.length / 4);
-      state.outputTokens += Math.ceil((result.result?.length ?? 0) / 4);
-    } else {
-      console.error('\n❌ 错误:', result.error);
-    }
-  } catch (error) {
-    if (thinking) clearTimeout(thinking);
-    console.error('\n❌ 异常:', error instanceof Error ? error.message : error);
-  }
 }
 
 // ==================== 配置管理 ====================

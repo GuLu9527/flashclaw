@@ -269,6 +269,7 @@ FEISHU_APP_SECRET=
 
 ```bash
 flashclaw start                      # 启动服务
+flashclaw cli                        # 终端对话渠道（连接服务）
 flashclaw init                       # 交互式初始化配置
 flashclaw init --non-interactive --api-key <key>  # 非交互式初始化
 flashclaw doctor                     # 检查运行环境

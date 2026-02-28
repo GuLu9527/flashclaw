@@ -151,11 +151,12 @@ function finalizeStreamedResponse(
  */
 async function sendMessageInternal(
   userMessage: string,
-  onToken?: (chunk: string) => void
+  onToken?: (chunk: string) => void,
+  onToolUse?: (toolName: string, input: unknown) => void
 ): Promise<string> {
   // 保存用户消息
   saveMessage('user', userMessage);
-  
+
   try {
     const runAgent = getRunAgent();
     if (!runAgent) {
@@ -178,7 +179,8 @@ async function sendMessageInternal(
       onToken: onToken ? (chunk: string) => {
         streamed += chunk;
         onToken(chunk);
-      } : undefined
+      } : undefined,
+      onToolUse: onToolUse
     }) as AgentResult;
     
     if (result.status === 'success' && result.result) {
@@ -212,9 +214,10 @@ export async function sendMessage(userMessage: string): Promise<string> {
  */
 export async function sendMessageStream(
   userMessage: string,
-  onToken: (chunk: string) => void
+  onToken: (chunk: string) => void,
+  onToolUse?: (toolName: string, input: unknown) => void
 ): Promise<string> {
-  return sendMessageInternal(userMessage, onToken);
+  return sendMessageInternal(userMessage, onToken, onToolUse);
 }
 
 /**

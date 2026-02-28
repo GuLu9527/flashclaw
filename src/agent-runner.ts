@@ -55,6 +55,8 @@ export interface AgentInput {
   attachments?: ImageAttachment[];
   /** 流式输出回调（可选） */
   onToken?: (text: string) => void;
+  /** 工具调用回调（可选） */
+  onToolUse?: (toolName: string, input: unknown) => void;
 }
 
 export interface AgentOutput {
@@ -717,9 +719,16 @@ async function runAgentOnce(
 
     // 检查是否有工具调用
     if (finalResponse.stop_reason === 'tool_use') {
+      // 触发工具调用回调
+      for (const block of finalResponse.content) {
+        if (block.type === 'tool_use') {
+          input.onToolUse?.(block.name, block.input);
+        }
+      }
+
       // 处理工具调用（使用活动超时 + 心跳）
       resetActivityTimeout();
-      
+
       result = await apiClient.handleToolUse(
         finalResponse,
         messages,

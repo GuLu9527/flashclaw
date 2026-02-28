@@ -1,0 +1,8 @@
+{
+  "name": "cli-channel",
+  "version": "1.0.0",
+  "type": "channel",
+  "description": "终端交互渠道 - CLI REPL 模式",
+  "main": "index.ts",
+  "dependencies": []
+}

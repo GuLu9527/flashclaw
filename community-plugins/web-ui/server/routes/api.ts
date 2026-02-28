@@ -200,19 +200,25 @@ apiRoutes.post('/chat/stream', async (c) => {
   try {
     const body = await c.req.json();
     const message = body.message;
-    
+
     if (!message || typeof message !== 'string') {
       return c.json({ success: false, error: '消息内容不能为空' }, 400);
     }
-    
+
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
       start(controller) {
         const write = (chunk: string) => {
           controller.enqueue(encoder.encode(chunk));
         };
-        
-        sendMessageStream(message.trim(), write)
+
+        // 工具调用回调：通过特殊格式发送
+        const onToolUse = (toolName: string, input: unknown) => {
+          const toolInfo = JSON.stringify({ name: toolName, input });
+          write(`\n[TOOL:${toolInfo}]\n`);
+        };
+
+        sendMessageStream(message.trim(), write, onToolUse)
           .then(() => controller.close())
           .catch((error) => {
             const errMsg = error instanceof Error ? error.message : '发送失败';
@@ -221,7 +227,7 @@ apiRoutes.post('/chat/stream', async (c) => {
           });
       },
     });
-    
+
     return new Response(stream, {
       headers: {
         'Content-Type': 'text/plain; charset=utf-8',

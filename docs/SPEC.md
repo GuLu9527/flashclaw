@@ -456,6 +456,7 @@ FlashClaw 提供 CLI 工具管理服务和插件。
 ```
 flashclaw
 ├── start                      # 启动服务（默认命令）
+├── cli                        # 终端对话渠道（连接服务）
 ├── init                       # 交互式初始化
 ├── doctor                     # 环境诊断
 ├── version                    # 显示版本

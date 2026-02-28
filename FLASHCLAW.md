@@ -371,6 +371,7 @@ npm run typecheck    # 类型检查
 # CLI
 flashclaw                          # 启动服务（默认）
 flashclaw start                    # 启动服务
+flashclaw cli                      # 终端对话渠道（连接服务）
 flashclaw init                     # 交互式初始化配置
 flashclaw init --non-interactive --api-key sk-xxx  # 非交互式初始化
 flashclaw doctor                   # 环境诊断
