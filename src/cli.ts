@@ -582,6 +582,7 @@ import { runAgent, AgentInput } from './agent-runner.js';
 import { getBuiltinPluginsDir, getCommunityPluginsDir, paths } from './paths.js';
 import { loadFromDir } from './plugins/loader.js';
 import { initDatabase } from './db.js';
+import { getMemoryManager } from './core/memory.js';
 
 interface ReplOptions {
   group?: string;
@@ -596,6 +597,7 @@ interface ReplState {
   outputTokens: number;
   group: string;
   batch: boolean;
+  memoryManager: ReturnType<typeof getMemoryManager>;
 }
 
 // 初始化 REPL 环境（插件系统等）
@@ -633,7 +635,8 @@ async function runRepl(options: ReplOptions): Promise<void> {
     inputTokens: 0,
     outputTokens: 0,
     group: options.group ?? 'cli-default',
-    batch: options.batch ?? false
+    batch: options.batch ?? false,
+    memoryManager: getMemoryManager()
   };
 
   // 单次问答模式
@@ -747,25 +750,35 @@ async function handleCommand(input: string, rl: readline.Interface, state: ReplS
       state.messageCount = 0;
       state.inputTokens = 0;
       state.outputTokens = 0;
+      // 清除 memory 上下文
+      state.memoryManager.clearContext(state.group);
       if (!state.batch) console.log('✅ 已新建会话 (上下文已清除)');
       break;
 
     case 'c':
     case 'compact':
-      if (!state.batch) console.log('✅ 上下文已压缩');
+      // 注意：compact 需要 apiClient 参数，这里只做提示
+      // 实际压缩需要在有 API 客户端时调用
+      if (!state.batch) {
+        console.log('ℹ️ 上下文压缩需要 API 客户端，当前跳过');
+        console.log('✅ 上下文状态正常');
+      }
       break;
 
     case 's':
     case 'status':
       if (!state.batch) {
+        const memoryKeys = state.memoryManager.getMemoryKeys(state.group);
         console.log('┌─────────────────────────────────────┐');
         console.log(`│ 当前模型: (默认)                      │`);
         console.log(`│ 使用 Token: ${state.inputTokens + state.outputTokens} / 100,000          │`);
         console.log(`│ 消息数: ${state.messageCount}                          │`);
         console.log(`│ 群组: ${state.group}                        │`);
+        console.log(`│ 记忆键: ${memoryKeys.length}                          │`);
         console.log('└─────────────────────────────────────┘');
       } else {
-        console.log(`model:default tokens:${state.inputTokens + state.outputTokens} messages:${state.messageCount} group:${state.group}`);
+        const memoryKeys = state.memoryManager.getMemoryKeys(state.group);
+        console.log(`model:default tokens:${state.inputTokens + state.outputTokens} messages:${state.messageCount} group:${state.group} memory_keys:${memoryKeys.length}`);
       }
       break;
 
