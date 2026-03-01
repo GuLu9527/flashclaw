@@ -386,6 +386,7 @@ export default plugin;
 9. **版本号一致** - CHANGELOG 版本号、package.json version、git tag 必须保持一致
    - 先更新 CHANGELOG 版本号，再执行 `npm version x.x.x`（会自动更新 package.json 和 git tag）
    - 最后执行 `git push && npm publish`
+10. **plugin.json 依赖声明** - `dependencies` 字段仅用于声明插件依赖（其他插件），npm 包依赖通过插件目录内的 `npm install` 安装，无需在 plugin.json 中声明
 
 ## 测试覆盖
 
