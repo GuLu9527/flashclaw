@@ -4,6 +4,23 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，
 并遵循 [语义化版本](https://semver.org/spec/v2.0.0.html)。
 
+## [1.7.0] - 2026-03-01
+
+### 新增
+- **AI Provider 插件化** - 将 AI 客户端从内置改为可插拔的插件架构
+  - 新增 `AIProviderPlugin` 接口 (`src/plugins/types.ts`)
+  - 新增 `pluginManager.getProviderByName()` / `getAllProviders()` 方法
+  - 支持通过环境变量 `AI_PROVIDER` 切换 AI Provider
+- **内置 Anthropic Provider** (`plugins/anthropic-provider`) - 默认 AI Provider，支持 Claude 模型
+- **社区 OpenAI Provider** (`community-plugins/openai-provider`) - 可选插件，支持 OpenAI、Ollama、LocalAI 等兼容服务
+
+### 改进
+- 插件系统支持 provider 类型
+- 配置系统新增 `OPENAI_API_KEY` / `OPENAI_BASE_URL` 环境变量支持
+
+### 文档
+- CLAUDE.md 新增 Agent Team 工作流程说明
+
 ## [1.6.0] - 2026-02-28
 
 ### 新增

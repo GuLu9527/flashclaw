@@ -16,7 +16,10 @@ dotenv.config();
 // Bot name for display in messages (customizable via .env)
 export const BOT_NAME = process.env.BOT_NAME || 'FlashClaw';
 
-// ==================== AI Model ====================
+// ==================== AI Provider ====================
+/** 默认 AI Provider（可通过 AI_PROVIDER 环境变量配置） */
+export const DEFAULT_AI_PROVIDER = process.env.AI_PROVIDER || 'anthropic-provider';
+
 /** 默认 AI 模型（所有文件统一使用此常量，避免不一致） */
 export const DEFAULT_AI_MODEL = process.env.AI_MODEL || process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-20250514';
 

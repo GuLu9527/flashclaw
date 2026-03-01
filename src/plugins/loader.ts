@@ -15,6 +15,7 @@ import {
   PluginConfig,
   isToolPlugin,
   isChannelPlugin,
+  isAIProviderPlugin,
 } from './types.js';
 import { pluginManager } from './manager.js';
 import { createLogger } from '../logger.js';
@@ -330,6 +331,8 @@ export async function loadPlugin(pluginPath: string): Promise<string | null> {
     if (isToolPlugin(plugin) && plugin.init) {
       await plugin.init(config);
     } else if (isChannelPlugin(plugin)) {
+      await plugin.init(config);
+    } else if (isAIProviderPlugin(plugin) && plugin.init) {
       await plugin.init(config);
     }
   } catch (err) {

@@ -68,7 +68,7 @@ export interface ToolSchema {
 export interface PluginManifest {
   name: string;
   version: string;
-  type: 'tool' | 'channel';
+  type: 'tool' | 'channel' | 'provider';
   description: string;
   author?: string;
   main: string;
@@ -119,25 +119,131 @@ export interface SendMessageResult {
 export interface ChannelPlugin {
   name: string;
   version: string;
-  
+
   init(config: PluginConfig): Promise<void>;
   start(): Promise<void>;
   stop(): Promise<void>;
-  
+
   onMessage(handler: MessageHandler): void;
   sendMessage(chatId: string, content: string, options?: SendMessageOptions): Promise<SendMessageResult>;
-  
+
   // 可选的高级方法
   updateMessage?(messageId: string, content: string): Promise<void>;
   deleteMessage?(messageId: string): Promise<void>;
   sendImage?(chatId: string, imageData: string | Buffer, caption?: string): Promise<SendMessageResult>;
   sendFile?(chatId: string, filePath: string, fileName?: string): Promise<SendMessageResult>;
-  
+
   reload?(): Promise<void>;
 }
 
+// ==================== AI Provider 相关类型 ====================
+
+// 图片内容块
+export interface ImageBlock {
+  type: 'image';
+  source: {
+    type: 'base64';
+    media_type: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
+    data: string;
+  };
+}
+
+// 文本内容块
+export interface TextBlock {
+  type: 'text';
+  text: string;
+}
+
+// 消息内容类型
+export type MessageContent = string | (TextBlock | ImageBlock)[];
+
+// 聊天消息
+export interface ChatMessage {
+  /** 角色：user 或 assistant */
+  role: 'user' | 'assistant';
+  /** 消息内容 - 可以是纯文本或包含图片的数组 */
+  content: MessageContent;
+}
+
+// 工具定义 Schema (Anthropic 格式)
+export interface ToolDefinition {
+  /** 工具名称 */
+  name: string;
+  /** 工具描述 */
+  description: string;
+  /** 参数 JSON Schema */
+  input_schema: {
+    type: 'object';
+    properties: Record<string, unknown>;
+    required?: string[];
+  };
+}
+
+// 聊天选项
+export interface ChatOptions {
+  /** 系统提示词 */
+  system?: string;
+  /** 可用工具列表 */
+  tools?: ToolDefinition[];
+  /** 最大输出 token 数 */
+  maxTokens?: number;
+  /** 温度参数 (0-1) */
+  temperature?: number;
+  /** 停止序列 */
+  stopSequences?: string[];
+}
+
+// 流式事件类型
+export type StreamEvent =
+  | { type: 'text'; text: string }
+  | { type: 'tool_use'; id: string; name: string; input: unknown }
+  | { type: 'done'; message: unknown };
+
+// 工具执行器类型
+export type ToolExecutor = (name: string, params: unknown) => Promise<unknown>;
+
+/**
+ * 心跳回调 - 用于通知外层（如 agent-runner）工具链仍在活动中
+ * 调用此函数可重置活动超时计时器，防止长工具链被误判为超时
+ */
+export type HeartbeatCallback = () => void;
+
+// AI Provider 插件接口
+export interface AIProviderPlugin {
+  name: string;
+  version: string;
+  description: string;
+
+  // 发送聊天消息
+  chat(messages: ChatMessage[], options?: ChatOptions): Promise<unknown>;
+
+  // 流式聊天
+  chatStream(messages: ChatMessage[], options?: ChatOptions): AsyncGenerator<StreamEvent>;
+
+  // 处理工具调用
+  handleToolUse(
+    response: unknown,
+    messages: ChatMessage[],
+    executeTool: ToolExecutor,
+    options?: ChatOptions,
+    heartbeat?: HeartbeatCallback
+  ): Promise<string>;
+
+  // 获取当前模型
+  getModel(): string;
+
+  // 设置模型
+  setModel(model: string): void;
+
+  // 初始化（可选）
+  init?(config: PluginConfig): Promise<void>;
+
+  // 清理资源（可选）
+  cleanup?(): Promise<void>;
+}
+
 // 插件类型
-export type Plugin = ToolPlugin | ChannelPlugin;
+export type Plugin = ToolPlugin | ChannelPlugin | AIProviderPlugin;
 
 // 类型守卫
 export function isToolPlugin(plugin: Plugin): plugin is ToolPlugin {
@@ -146,4 +252,18 @@ export function isToolPlugin(plugin: Plugin): plugin is ToolPlugin {
 
 export function isChannelPlugin(plugin: Plugin): plugin is ChannelPlugin {
   return 'onMessage' in plugin && 'sendMessage' in plugin;
+}
+
+export function isAIProviderPlugin(plugin: unknown): plugin is AIProviderPlugin {
+  return (
+    typeof plugin === 'object' &&
+    plugin !== null &&
+    'name' in plugin &&
+    'version' in plugin &&
+    'chat' in plugin &&
+    'chatStream' in plugin &&
+    'handleToolUse' in plugin &&
+    'getModel' in plugin &&
+    'setModel' in plugin
+  );
 }

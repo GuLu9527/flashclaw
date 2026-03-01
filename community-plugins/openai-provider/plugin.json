@@ -1,0 +1,7 @@
+{
+  "name": "openai-provider",
+  "version": "1.0.0",
+  "type": "provider",
+  "description": "OpenAI API 兼容 Provider - 支持 OpenAI、Ollama、LocalAI 等兼容服务",
+  "main": "index.ts"
+}

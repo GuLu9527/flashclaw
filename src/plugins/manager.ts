@@ -7,9 +7,11 @@ import {
   Plugin,
   ToolPlugin,
   ChannelPlugin,
+  AIProviderPlugin,
   ToolSchema,
   isToolPlugin,
   isChannelPlugin,
+  isAIProviderPlugin,
 } from './types.js';
 import { createLogger } from '../logger.js';
 
@@ -18,7 +20,7 @@ const logger = createLogger('PluginManager');
 // 插件注册表项
 interface PluginEntry {
   plugin: Plugin;
-  type: 'tool' | 'channel';
+  type: 'tool' | 'channel' | 'provider';
   loadedAt: Date;
 }
 
@@ -29,6 +31,9 @@ interface PluginEntry {
 export class PluginManager {
   // 插件注册表：name -> PluginEntry
   private plugins = new Map<string, PluginEntry>();
+
+  // 当前 AI Provider
+  private currentProvider: AIProviderPlugin | null = null;
 
   /**
    * 注册插件
@@ -45,7 +50,19 @@ export class PluginManager {
     }
 
     // 确定插件类型
-    const type = isToolPlugin(plugin) ? 'tool' : 'channel';
+    let type: 'tool' | 'channel' | 'provider';
+    if (isAIProviderPlugin(plugin)) {
+      type = 'provider';
+      // 如果没有设置过 provider，自动设置为这个
+      if (!this.currentProvider) {
+        this.currentProvider = plugin;
+        logger.info({ plugin: name, version: plugin.version }, '⚡ 已设置为当前 AI Provider');
+      }
+    } else if (isToolPlugin(plugin)) {
+      type = 'tool';
+    } else {
+      type = 'channel';
+    }
 
     // 注册
     this.plugins.set(name, {
@@ -180,23 +197,25 @@ export class PluginManager {
   /**
    * 获取插件数量统计
    */
-  getStats(): { total: number; tools: number; channels: number } {
+  getStats(): { total: number; tools: number; channels: number; providers: number } {
     let tools = 0;
     let channels = 0;
+    let providers = 0;
 
     for (const entry of this.plugins.values()) {
       if (entry.type === 'tool') tools++;
-      else channels++;
+      else if (entry.type === 'channel') channels++;
+      else if (entry.type === 'provider') providers++;
     }
 
-    return { total: this.plugins.size, tools, channels };
+    return { total: this.plugins.size, tools, channels, providers };
   }
 
   /**
    * 清空所有插件
    */
   async clear(): Promise<void> {
-    // 先停止所有渠道插件，清理所有工具插件
+    // 先停止所有渠道插件，清理所有工具插件，清理所有 provider 插件
     for (const entry of this.plugins.values()) {
       if (isChannelPlugin(entry.plugin)) {
         await entry.plugin.stop().catch((err) => {
@@ -208,9 +227,15 @@ export class PluginManager {
           logger.warn({ plugin: entry.plugin.name, err }, '清理工具插件失败（清空时）');
         });
       }
+      if (isAIProviderPlugin(entry.plugin) && entry.plugin.cleanup) {
+        await entry.plugin.cleanup().catch((err) => {
+          logger.warn({ plugin: entry.plugin.name, err }, '清理 Provider 插件失败（清空时）');
+        });
+      }
     }
 
     this.plugins.clear();
+    this.currentProvider = null;
     logger.info('⚡ 已清空所有插件');
   }
 
@@ -219,7 +244,7 @@ export class PluginManager {
    */
   async stopAll(): Promise<void> {
     const promises: Promise<void>[] = [];
-    
+
     for (const entry of this.plugins.values()) {
       if (isChannelPlugin(entry.plugin)) {
         promises.push(
@@ -229,9 +254,53 @@ export class PluginManager {
         );
       }
     }
-    
+
     await Promise.all(promises);
     logger.info('⚡ 所有渠道插件已停止');
+  }
+
+  /**
+   * 设置当前 AI Provider
+   * @param provider AI Provider 插件实例
+   */
+  setProvider(provider: AIProviderPlugin): void {
+    this.currentProvider = provider;
+    logger.info({ plugin: provider.name }, '⚡ 已设置当前 AI Provider');
+  }
+
+  /**
+   * 获取当前 AI Provider
+   * @returns 当前 Provider 实例，如果没有则返回 null
+   */
+  getProvider(): AIProviderPlugin | null {
+    return this.currentProvider;
+  }
+
+  /**
+   * 根据名称获取 AI Provider
+   * @param name Provider 插件名称
+   * @returns Provider 实例，如果没有找到则返回 null
+   */
+  getProviderByName(name: string): AIProviderPlugin | null {
+    const entry = this.plugins.get(name);
+    if (entry && entry.type === 'provider') {
+      return entry.plugin as AIProviderPlugin;
+    }
+    return null;
+  }
+
+  /**
+   * 获取所有已注册的 AI Provider
+   * @returns 所有 Provider 实例数组
+   */
+  getAllProviders(): AIProviderPlugin[] {
+    const providers: AIProviderPlugin[] = [];
+    for (const entry of this.plugins.values()) {
+      if (entry.type === 'provider') {
+        providers.push(entry.plugin as AIProviderPlugin);
+      }
+    }
+    return providers;
   }
 }
 

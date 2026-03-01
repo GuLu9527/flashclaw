@@ -12,6 +12,32 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { ApiClient, ChatMessage, MessageContent, TextBlock } from './api-client.js';
+import type { AIProviderPlugin, ChatOptions } from '../plugins/types.js';
+
+/**
+ * 兼容 ApiClient 和 AIProviderPlugin 的类型
+ * 两者都有 chat 方法，但 extractText 只在 ApiClient 上有
+ */
+type AIClient = ApiClient | AIProviderPlugin;
+
+/**
+ * 从响应中提取文本（兼容两种客户端）
+ */
+function extractResponseText(response: unknown, client: AIClient): string {
+  // 如果有 extractText 方法（旧的 ApiClient），使用它
+  if ('extractText' in client && typeof client.extractText === 'function') {
+    return client.extractText(response as Parameters<typeof client.extractText>[0]);
+  }
+  // 否则，从响应中手动提取（AIProviderPlugin）
+  const msg = response as { content?: Array<{ type: string; text?: string }> };
+  if (msg.content) {
+    return msg.content
+      .filter((block): block is { type: 'text'; text: string } => block.type === 'text')
+      .map(block => block.text || '')
+      .join('');
+  }
+  return '';
+}
 import { createLogger } from '../logger.js';
 
 const logger = createLogger('MemoryManager');
@@ -574,7 +600,7 @@ export class MemoryManager {
    * @param apiClient - API 客户端（用于生成摘要）
    * @returns 压缩结果
    */
-  async compact(groupId: string, apiClient: ApiClient): Promise<CompactResult> {
+  async compact(groupId: string, client: AIClient): Promise<CompactResult> {
     // 防止并发压缩同一群组
     if (this.compactingGroups.has(groupId)) {
       logger.debug({ groupId }, '📦 压缩进行中，跳过重复请求');
@@ -590,7 +616,7 @@ export class MemoryManager {
     this.compactingGroups.add(groupId);
     
     try {
-      return await this.compactInternal(groupId, apiClient);
+      return await this.compactInternal(groupId, client);
     } finally {
       this.compactingGroups.delete(groupId);
     }
@@ -599,7 +625,7 @@ export class MemoryManager {
   /**
    * 内部压缩实现（由 compact 方法调用，受并发锁保护）
    */
-  private async compactInternal(groupId: string, apiClient: ApiClient): Promise<CompactResult> {
+  private async compactInternal(groupId: string, client: AIClient): Promise<CompactResult> {
     const messages = this.shortTermMemory.get(groupId) || [];
     const originalCount = messages.length;
     const originalTokens = this.estimateTokens(messages);
@@ -646,7 +672,7 @@ export class MemoryManager {
     // 生成摘要
     let summary = '';
     try {
-      summary = await this.generateSummary(toCompress, apiClient);
+      summary = await this.generateSummary(toCompress, client);
     } catch (error) {
       logger.error({ error, groupId }, '生成摘要失败，跳过压缩');
       return {
@@ -688,22 +714,22 @@ export class MemoryManager {
   
   /**
    * 生成对话摘要
-   * 
+   *
    * @param messages - 要压缩的消息
-   * @param apiClient - API 客户端
+   * @param client - API 客户端（兼容 ApiClient 和 AIProviderPlugin）
    * @returns 摘要文本
    */
   private async generateSummary(
     messages: ChatMessage[],
-    apiClient: ApiClient
+    client: AIClient
   ): Promise<string> {
     // 格式化消息为文本
     const conversationText = messages
       .map(msg => `${msg.role === 'user' ? '用户' : '助手'}: ${extractTextContent(msg.content)}`)
       .join('\n\n');
-    
+
     // 使用 AI 生成摘要
-    const response = await apiClient.chat(
+    const response = await client.chat(
       [
         {
           role: 'user',
@@ -723,8 +749,8 @@ ${conversationText}
         temperature: 0.3,
       }
     );
-    
-    return apiClient.extractText(response);
+
+    return extractResponseText(response, client);
   }
   
   /**

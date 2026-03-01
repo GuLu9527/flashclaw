@@ -1,0 +1,7 @@
+{
+  "name": "anthropic-provider",
+  "version": "1.0.0",
+  "type": "provider",
+  "description": "Anthropic AI Provider - 支持 Claude 等模型",
+  "main": "index.ts"
+}

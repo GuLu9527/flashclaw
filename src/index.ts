@@ -19,8 +19,9 @@ import { z } from 'zod';
 import { paths, ensureDirectories, getBuiltinPluginsDir, getCommunityPluginsDir } from './paths.js';
 import { pluginManager } from './plugins/manager.js';
 import { loadFromDir, watchPlugins, stopWatching } from './plugins/loader.js';
-import { Message, ToolContext } from './plugins/types.js';
-import { ApiClient, getApiClient } from './core/api-client.js';
+import { Message, ToolContext, AIProviderPlugin } from './plugins/types.js';
+import { getApiClient } from './core/api-client.js';
+import { getCurrentModelId, currentModelSupportsVision, getModelContextWindow } from './core/model-capabilities.js';
 import { MemoryManager, getMemoryManager } from './core/memory.js';
 import { ChannelManager } from './channel-manager.js';
 import {
@@ -33,6 +34,7 @@ import {
 } from './utils/network.js';
 import {
   BOT_NAME,
+  DEFAULT_AI_PROVIDER,
   DEFAULT_AI_MODEL,
   MAIN_GROUP_FOLDER,
   IPC_POLL_INTERVAL,
@@ -77,6 +79,8 @@ declare global {
   var __flashclaw_run_agent: typeof runAgent | undefined;
   // eslint-disable-next-line no-var
   var __flashclaw_registered_groups: Map<string, RegisteredGroup> | undefined;
+  // eslint-disable-next-line no-var
+  var __flashclaw_api_provider: AIProviderPlugin | undefined;
 }
 
 // ⚡ FlashClaw Logger
@@ -87,7 +91,7 @@ const logger = pino({
 
 // ==================== 全局状态 ====================
 let channelManager: ChannelManager;
-let apiClient: ApiClient | null;
+let apiProvider: ReturnType<typeof pluginManager.getProvider>;
 let memoryManager: MemoryManager;
 let sessions: Session = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
@@ -1163,9 +1167,6 @@ ${envExists
     logger.warn('API Key 未配置，AI 功能将不可用。机器人可以启动但无法回复消息。');
   }
   
-  // 初始化 API 客户端（全局单例）
-  apiClient = getApiClient();
-  
   // 初始化记忆管理器（使用全局单例）
   memoryManager = getMemoryManager();
   
@@ -1201,6 +1202,62 @@ ${envExists
       logger.info({ event, plugin: name }, '⚡ 插件变化');
     });
   }
+
+  // 初始化 AI Provider（在插件加载之后）
+  // 根据配置选择指定的 Provider
+  const configuredProvider = DEFAULT_AI_PROVIDER;
+  const availableProviders = pluginManager.getAllProviders();
+
+  if (availableProviders.length > 0) {
+    // 优先使用配置的 provider
+    const targetProvider = pluginManager.getProviderByName(configuredProvider);
+    if (targetProvider) {
+      pluginManager.setProvider(targetProvider);
+      apiProvider = targetProvider;
+      logger.info({ configured: configuredProvider }, '⚡ 使用配置的 AI Provider');
+    } else {
+      // 配置的 provider 不存在，使用第一个可用的
+      apiProvider = pluginManager.getProvider();
+      logger.warn({ configured: configuredProvider, available: apiProvider?.name }, '⚡ 配置的 Provider 不存在，使用默认');
+    }
+  }
+
+  // 如果没有加载任何 provider 插件，尝试使用旧的 api-client（向后兼容）
+  if (!apiProvider) {
+    const legacyApiClient = getApiClient();
+    if (legacyApiClient) {
+      // 将 legacy ApiClient 包装为 provider（临时兼容方案）
+      apiProvider = legacyApiClient as unknown as typeof apiProvider;
+      logger.info('使用旧的 API 客户端（向后兼容）');
+    }
+  }
+
+  if (!apiProvider) {
+    console.error(`
+\x1b[31m
+  ███████╗██████╗ ██████╗  ██████╗ ██████╗
+  ██╔════╝██╔══██╗██╔══██╗██╔═══██╗██╔══██╗
+  █████╗  ██████╔╝██████╔╝██║   ██║██████╔╝
+  ██╔══╝  ██╔══██╗██╔══██╗ ████║  ║██╔══██╗
+  ███████╗██║  ██║██║  ██║╚██████╔╝██║  ██║
+  ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝
+\x1b[0m
+  \x1b[31m✗ 没有可用的 AI Provider\x1b[0m
+
+  需要配置 AI Provider，请检查:
+  1. 是否安装了 anthropic-provider 插件
+  2. 对应的环境变量是否已在 \x1b[33m.env\x1b[0m 中配置
+
+  \x1b[33mflashclaw init\x1b[33m                    交互式配置
+  \x1b[33mflashclaw plugins list\x1b[0m 查看已安装插件
+  \x1b[33mflashclaw doctor\x1b[0m                   诊断配置问题
+`);
+    process.exit(1);
+  }
+
+  // 暴露 provider 给外部模块（用于 model-capabilities 等）
+  global.__flashclaw_api_provider = apiProvider;
+  logger.info({ provider: apiProvider.name, model: apiProvider.getModel() }, '⚡ AI Provider 已初始化');
 
   // 初始化渠道管理器
   channelManager = new ChannelManager();

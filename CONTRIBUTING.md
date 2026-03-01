@@ -73,8 +73,8 @@ flashclaw/
 │   ├── task-scheduler.ts     # 定时任务调度
 │   ├── utils.ts              # 工具函数
 │   │
-│   ├── core/                 # 核心模块
-│   │   ├── api-client.ts     # AI API 客户端
+│   ├── core/                 # 核心模块（向后兼容）
+│   │   ├── api-client.ts     # 向后兼容的 AI 客户端
 │   │   ├── memory.ts         # 记忆管理
 │   │   └── model-capabilities.ts  # 模型能力检测
 │   │

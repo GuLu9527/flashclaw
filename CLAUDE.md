@@ -15,7 +15,7 @@
 │   飞书、定时任务、记忆、web-fetch...     │
 ├─────────────────────────────────────────┤
 │           核心地基 (极简)                │
-│   消息路由 | 插件加载器 | AI 客户端      │
+│   消息路由 | 插件加载器 | AI Provider    │
 └─────────────────────────────────────────┘
 ```
 
@@ -32,7 +32,7 @@
 **核心只做三件事：**
 1. 消息路由 - 接收消息，分发到 Agent
 2. 插件加载 - 发现、加载、管理插件生命周期
-3. AI 客户端 - 与 AI API 通信
+3. AI Provider - 可插拔的 AI 客户端（内置 Anthropic，支持 OpenAI 等）
 
 **其他一切都是插件：**
 - 渠道插件：飞书、Telegram、企业微信...
@@ -68,6 +68,7 @@ plugins/{plugin-name}/
 |------|------|------|
 | `channel` | `ChannelPlugin` | 消息渠道（飞书、钉钉） |
 | `tool` | `ToolPlugin` | AI 可调用的工具 |
+| `provider` | `AIProviderPlugin` | AI Provider（Anthropic、OpenAI 等） |
 
 > `type` 字段仅存在于 `plugin.json` 清单文件中，插件对象本身不需要 `type` 字段。
 
@@ -176,8 +177,8 @@ src/                    # 核心代码（尽量不动）
 │   ├── types.ts        # 插件类型定义
 │   ├── installer.ts    # 插件安装/卸载
 │   └── index.ts        # 插件入口
-├── core/               # 核心模块
-│   ├── api-client.ts   # AI 客户端 (Anthropic)
+├── core/               # 核心模块（尽量不动）
+│   ├── api-client.ts   # 向后兼容的 AI 客户端（已迁移到插件）
 │   ├── memory.ts       # 记忆管理 (短期+长期+压缩)
 │   ├── context-guard.ts # 上下文窗口保护
 │   └── model-capabilities.ts # 模型能力检测
@@ -250,11 +251,17 @@ AGENT_TIMEOUT=300000            # Agent 超时（毫秒）
 
 ### AI 配置
 ```bash
-ANTHROPIC_AUTH_TOKEN=           # API 密钥（推荐）
-ANTHROPIC_API_KEY=              # API 密钥（兼容）
-ANTHROPIC_BASE_URL=             # 可选：自定义 API 地址
+AI_PROVIDER=                    # AI Provider: anthropic-provider(默认) / openai-provider
 AI_MODEL=                       # 可选：模型名称
-ANTHROPIC_MODEL=                # 可选：模型名称
+
+# Anthropic (使用 anthropic-provider 时)
+ANTHROPIC_AUTH_TOKEN=           # API 密钥
+ANTHROPIC_BASE_URL=             # 可选：自定义 API 地址
+
+# OpenAI (使用 openai-provider 时)
+OPENAI_API_KEY=                 # API 密钥
+OPENAI_BASE_URL=                # 可选：OpenAI 兼容地址（如 Ollama）
+
 TIMEZONE=Asia/Shanghai          # 时区
 ```
 
@@ -329,6 +336,38 @@ export default plugin;
 // plugins/plugin-registry/index.ts
 // 实现 install/remove/update 命令
 // 作为可选插件，不是核心功能
+```
+
+## Agent Team 工作流程
+
+当任务需要多人协作时，可使用 Agent Team 模式：
+
+### 团队角色
+
+| 角色 | 人数 | 职责 |
+|------|------|------|
+| Developer | 2 | 代码开发实现 |
+| Reviewer | 1 | 代码审核把关 |
+| Debuger | 1 | 问题排查测试 |
+
+### 工作流程
+
+```
+开发 -> 审核 -> 测试 -> (失败) -> 开发修复 -> 审核 -> 测试 -> ...
+                     -> (成功) -> 完成
+```
+
+**流程规则：**
+1. 两个 Developer 并行开发，完成后交给 Reviewer
+2. Reviewer 审核通过，交给 Debuger 测试
+3. 审核失败：返回 Developer 修复后重新提交
+4. 测试失败：返回 Developer 修复 -> 重新审核 -> 重新测试
+5. 循环往复直至成功
+
+### 启动团队
+
+```bash
+# 告诉 Claude 使用 Agent Team 模式完成某个任务
 ```
 
 ## 注意事项

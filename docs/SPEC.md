@@ -87,7 +87,7 @@
 |------|------|------|
 | 消息连接 | 飞书 SDK | 连接消息平台，发送/接收消息 |
 | 消息存储 | SQLite (better-sqlite3) | 存储消息用于处理 |
-| AI 调用 | 直接 API 调用 | 支持 Anthropic 及兼容 API |
+| AI 调用 | AI Provider 插件 | 可插拔架构，支持多种 AI 服务 |
 | 运行时 | Node.js 20+ | 主进程，路由、调度、代理执行 |
 | CLI | Commander.js | 命令行工具 |
 | 交互式 CLI | @clack/prompts | 交互式 CLI 框架 |

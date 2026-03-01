@@ -112,6 +112,7 @@ community-plugins/
 |------|------|------|
 | `channel` | 消息渠道插件 | 飞书、Telegram、Slack |
 | `tool` | AI 工具插件 | 发送消息、定时任务 |
+| `provider` | AI Provider 插件 | anthropic-provider、openai-provider |
 
 ### 创建插件
 
@@ -131,16 +132,18 @@ community-plugins/
 - 使用 `flashclaw config restore` 恢复误操作
 
 ```bash
-# AI API 配置（三选一）
-# 方式1：Anthropic 官方 API（两者任选其一）
+# AI Provider 配置
+AI_PROVIDER=anthropic-provider    # 可选：anthropic-provider（默认）、openai-provider
+AI_MODEL=claude-sonnet-4-20250514 # 模型名称（provider 会根据类型使用不同默认值）
+
+# Anthropic 配置（使用 anthropic-provider 时）
 ANTHROPIC_AUTH_TOKEN=sk-ant-xxx
 ANTHROPIC_API_KEY=sk-ant-xxx
+ANTHROPIC_BASE_URL=                # 可选：API 代理地址
 
-# 方式2：API 代理（如 MiniMax）
-ANTHROPIC_BASE_URL=https://api.minimaxi.com/anthropic
-ANTHROPIC_AUTH_TOKEN=your-token
-AI_MODEL=MiniMax-M2.1
-ANTHROPIC_MODEL=claude-4-5-sonnet-20250929
+# OpenAI 配置（使用 openai-provider 时）
+OPENAI_API_KEY=sk-xxx
+OPENAI_BASE_URL=                   # 可选：OpenAI 兼容服务地址（如 Ollama、LocalAI）
 
 # 飞书配置
 FEISHU_APP_ID=cli_xxx

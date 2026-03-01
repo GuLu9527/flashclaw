@@ -2,11 +2,18 @@
 import { z } from 'zod';
 
 export const envSchema = z.object({
-  // AI API 配置
+  // AI Provider 配置
+  AI_PROVIDER: z.string().default('anthropic-provider'),
+  AI_MODEL: z.string().default('claude-sonnet-4-20250514'),
+
+  // Anthropic 配置
   ANTHROPIC_API_KEY: z.string().optional(),
   ANTHROPIC_BASE_URL: z.string().url().optional(),
   ANTHROPIC_AUTH_TOKEN: z.string().optional(),
-  AI_MODEL: z.string().default('claude-sonnet-4-20250514'),
+
+  // OpenAI 配置
+  OPENAI_API_KEY: z.string().optional(),
+  OPENAI_BASE_URL: z.string().url().optional(),
   
   // 飞书配置
   FEISHU_APP_ID: z.string().optional(),

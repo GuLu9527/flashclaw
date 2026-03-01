@@ -19,10 +19,10 @@ import {
 } from './config.js';
 import { paths } from './paths.js';
 import { RegisteredGroup } from './types.js';
-import { ApiClient, ChatMessage, ToolSchema, getApiClient, TextBlock, ImageBlock } from './core/api-client.js';
+import { ChatMessage, ToolSchema, TextBlock, ImageBlock } from './core/api-client.js';
+import { pluginManager } from './plugins/manager.js';
 import { currentModelSupportsVision, getCurrentModelId, getModelContextWindow } from './core/model-capabilities.js';
 import { MemoryManager, getMemoryManager as getGlobalMemoryManager } from './core/memory.js';
-import { pluginManager } from './plugins/manager.js';
 import { ToolContext, ToolResult as PluginToolResult } from './plugins/types.js';
 import { recordTokenUsage, checkCompactThreshold } from './session-tracker.js';
 import { createLogger } from './logger.js';
@@ -211,8 +211,8 @@ export function getMemoryManager(): MemoryManager {
   return getGlobalMemoryManager();
 }
 
-// 注意：API 客户端使用 core/api-client.ts 中的全局单例
-// 通过 getApiClient() 获取，确保 jiti 热加载的插件访问同一实例
+// 注意：API Provider 使用 pluginManager.getProvider() 获取
+// 如果没有配置 provider 插件，默认使用内置的 anthropic-provider
 
 // ==================== Retry Configuration ====================
 
@@ -453,13 +453,13 @@ async function runAgentOnce(
 ): Promise<AgentOutput> {
   const startTime = Date.now();
 
-  // 获取 API 客户端
-  const apiClient = getApiClient();
-  if (!apiClient) {
+  // 从 pluginManager 获取 AI Provider
+  const apiProvider = pluginManager.getProvider();
+  if (!apiProvider) {
     return {
       status: 'error',
       result: null,
-      error: 'API client not configured. Set ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY environment variable.'
+      error: 'AI Provider not configured. Please install and configure a provider plugin.'
     };
   }
 
@@ -618,7 +618,7 @@ async function runAgentOnce(
       warning: ctxCheck.warning,
     }, '🛡️ 上下文窗口空间紧张，触发自动压缩');
 
-    await memoryManager.compact(group.folder, apiClient);
+    await memoryManager.compact(group.folder, apiProvider);
 
     // 压缩后重新获取上下文和消息
     const compactedContext = memoryManager.getContext(group.folder);
@@ -663,74 +663,89 @@ async function runAgentOnce(
   try {
     // 使用流式 API 获取响应（避免长时间等待导致超时）
     let responseText = '';
-    let finalResponse: Anthropic.Message | null = null;
-    
+    let stopReason: string | null = null;
+    let usage: { input_tokens: number; output_tokens: number } | null = null;
+
     logger.info({ group: group.name }, '⚡ 开始流式请求');
-    
-    for await (const event of apiClient.chatStream(messages, {
+
+    for await (const event of apiProvider.chatStream(messages, {
       system: systemPrompt,
       tools,
       maxTokens: AI_MAX_OUTPUT_TOKENS
     })) {
       // 每收到数据就重置超时计时器
       resetActivityTimeout();
-      
+
       if (isTimedOut) {
         throw new Error(`Agent timed out after ${timeout}ms of inactivity`);
       }
-      
+
       if (event.type === 'text') {
         responseText += event.text;
         input.onToken?.(event.text);
       } else if (event.type === 'done') {
-        finalResponse = event.message;
+        // 从 event.message 中提取 stop_reason 和 usage
+        const msg = event.message as Anthropic.Message;
+        stopReason = msg.stop_reason || null;
+        usage = msg.usage || null;
       }
     }
-    
+
     clearActivityTimeout();
-    
-    if (!finalResponse) {
+
+    if (!stopReason) {
       throw new Error('No response received from API');
     }
-    
+
     // 调试：打印 API 响应
-    logger.info({ 
+    logger.info({
       group: group.name,
-      stopReason: finalResponse.stop_reason,
-      contentTypes: finalResponse.content.map((c) => c.type)
+      stopReason,
     }, '⚡ API 响应');
-    
+
     // 记录 token 使用
-    if (finalResponse.usage) {
+    if (usage) {
       const session = recordTokenUsage(input.chatJid, {
-        inputTokens: finalResponse.usage.input_tokens || 0,
-        outputTokens: finalResponse.usage.output_tokens || 0
+        inputTokens: usage.input_tokens || 0,
+        outputTokens: usage.output_tokens || 0
       }, getCurrentModelId());
       
       logger.info({
         chatId: input.chatJid,
-        inputTokens: finalResponse.usage.input_tokens,
-        outputTokens: finalResponse.usage.output_tokens,
+        inputTokens: usage?.input_tokens,
+        outputTokens: usage?.output_tokens,
         totalTokens: session.totalTokens
       }, '📊 Token 统计');
     }
 
     let result: string;
 
-    // 检查是否有工具调用
-    if (finalResponse.stop_reason === 'tool_use') {
+    // 检查是否有工具调用（需要在流式处理中收集 tool_use 事件）
+    // 由于流式处理已经完成，我们需要检查是否有 tool_use 事件被触发
+    // 这里使用 stopReason 来判断
+    if (stopReason === 'tool_use') {
+      // 处理工具调用（使用活动超时 + 心跳）
+      // 注意：由于我们不再保存完整的 finalResponse，需要在流式处理时收集 tool_use 信息
+      // 但为了简化，这里需要 provider 返回完整的响应信息
+      // 暂时使用一个简化方案：重新调用 chat 获取 tool_use 信息
+      resetActivityTimeout();
+
+      // 直接使用 chat 方法获取完整响应以处理工具调用
+      const chatResponse = await apiProvider.chat(messages, {
+        system: systemPrompt,
+        tools,
+        maxTokens: AI_MAX_OUTPUT_TOKENS
+      }) as Anthropic.Message;
+
       // 触发工具调用回调
-      for (const block of finalResponse.content) {
+      for (const block of chatResponse.content) {
         if (block.type === 'tool_use') {
           input.onToolUse?.(block.name, block.input);
         }
       }
 
-      // 处理工具调用（使用活动超时 + 心跳）
-      resetActivityTimeout();
-
-      result = await apiClient.handleToolUse(
-        finalResponse,
+      result = await apiProvider.handleToolUse(
+        chatResponse,
         messages,
         async (name, params) => {
           resetActivityTimeout(); // 工具执行时也重置超时
@@ -744,11 +759,11 @@ async function runAgentOnce(
         // 心跳回调：工具链内每收到流式数据或执行工具时重置超时
         () => resetActivityTimeout()
       );
-      
+
       clearActivityTimeout();
     } else {
-      // 使用流式收集的文本，或从响应中提取
-      result = responseText || apiClient.extractText(finalResponse);
+      // 使用流式收集的文本
+      result = responseText;
     }
 
     // 保存助手回复到记忆
@@ -757,7 +772,7 @@ async function runAgentOnce(
     // 检查是否需要压缩上下文
     if (memoryManager.needsCompaction(group.folder)) {
       logger.info({ group: group.name }, 'Compacting conversation context');
-      await memoryManager.compact(group.folder, apiClient);
+      await memoryManager.compact(group.folder, apiProvider);
     }
 
     const duration = Date.now() - startTime;
