@@ -383,6 +383,9 @@ export default plugin;
    - 添加 `[x.x.x] - YYYY-MM-DD` 版本条目
    - 按 `### 新增` / `### 改进` / `### 修复` 分类记录变更
    - 与 commit 同时提交
+9. **版本号一致** - CHANGELOG 版本号、package.json version、git tag 必须保持一致
+   - 先更新 CHANGELOG 版本号，再执行 `npm version x.x.x`（会自动更新 package.json 和 git tag）
+   - 最后执行 `git push && npm publish`
 
 ## 测试覆盖
 
