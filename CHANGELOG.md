@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-03-03
+
 ### 改进
 - CLI `/status` 与对话输出新增运行时指标：模型、耗时、真实输入/输出 Token、TPS（优先使用 provider 返回的 usage）
 - Web UI 状态接口 `/api/status` 新增 `provider` 与 `model` 字段，便于前端和 CLI 展示当前模型信息
