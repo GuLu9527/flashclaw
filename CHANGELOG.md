@@ -6,6 +6,11 @@
 
 ## [Unreleased]
 
+### 修复
+- **P0: 工具调用重复 API 请求** — `agent-runner.ts` 流式检测到 `tool_use` 后不再重复发送 `chat()` 请求，直接复用流式收集的完整消息对象，工具调用场景响应时间减半
+- **P1: openai-provider 工具链改用流式** — `handleToolUse` 后续调用从非流式 `chat()` 改为流式 `chatStream()`，本地模型（Ollama）可边生成边返回
+- **openai-provider 流式 tool_calls 数据完整性** — `chatStream` 正确收集流式 delta 中的 tool_calls 数据（逐步拼装 name + arguments），`done` 事件包含完整工具调用信息
+
 ## [1.7.1] - 2026-03-03
 
 ### 改进

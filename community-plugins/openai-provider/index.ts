@@ -213,9 +213,10 @@ const openaiProvider: AIProviderPlugin = {
     const stream = await client.chat.completions.create(params);
 
     let finalContent = '';
-    let hasToolCalls = false;
     let finishReason: string | null = null;
     let usage: { input_tokens?: number; output_tokens?: number } | undefined;
+    // 收集完整的 tool_calls 数据（流式 delta 需要逐步拼装）
+    const collectedToolCalls: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }> = [];
 
     for await (const chunk of stream) {
       const choice = chunk.choices[0];
@@ -234,14 +235,32 @@ const openaiProvider: AIProviderPlugin = {
       }
 
       if (delta?.tool_calls && delta.tool_calls.length > 0) {
-        hasToolCalls = true;
         for (const tc of delta.tool_calls) {
-          yield {
-            type: 'tool_use',
-            id: tc.id || `tool-${Date.now()}`,
-            name: tc.function?.name || '',
-            input: tc.function?.arguments || '',
-          };
+          const idx = tc.index ?? collectedToolCalls.length;
+          // 首次出现该 index，初始化条目
+          if (!collectedToolCalls[idx]) {
+            collectedToolCalls[idx] = {
+              id: tc.id || `tool-${Date.now()}-${idx}`,
+              type: 'function',
+              function: { name: '', arguments: '' },
+            };
+          }
+          // 拼装 name 和 arguments
+          if (tc.function?.name) {
+            collectedToolCalls[idx].function.name += tc.function.name;
+          }
+          if (tc.function?.arguments) {
+            collectedToolCalls[idx].function.arguments += tc.function.arguments;
+          }
+          // 发出 tool_use 事件（仅在有 name 时，避免重复）
+          if (tc.function?.name) {
+            yield {
+              type: 'tool_use',
+              id: collectedToolCalls[idx].id,
+              name: tc.function.name,
+              input: tc.function?.arguments || '',
+            };
+          }
         }
       }
 
@@ -250,12 +269,14 @@ const openaiProvider: AIProviderPlugin = {
       }
     }
 
+    // 构建完整的 OpenAI 格式响应对象，供 handleToolUse 使用
+    const toolCalls = collectedToolCalls.length > 0 ? collectedToolCalls : undefined;
     yield {
       type: 'done',
       message: {
         stop_reason: finishReason || 'stop',
         usage,
-        choices: [{ message: { content: finalContent, tool_calls: hasToolCalls ? [] : undefined } }],
+        choices: [{ message: { content: finalContent, tool_calls: toolCalls } }],
       },
     };
   },
@@ -321,16 +342,28 @@ const openaiProvider: AIProviderPlugin = {
       return '已达到最大工具调用深度';
     }
 
-    // 继续调用 AI
-    const nextResponse = await this.chat(messages, options);
+    // 使用流式调用获取后续响应（避免非流式在本地模型上更慢）
+    let nextContent = '';
+    let nextToolCalls: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }> = [];
+    let nextMessage: unknown = null;
 
-    // 检查是否有新的工具调用
-    const nextMessage = (nextResponse as OpenAI.Chat.ChatCompletion).choices[0]?.message;
-    if (nextMessage?.tool_calls && nextMessage.tool_calls.length > 0) {
-      return this.handleToolUse(nextResponse, messages, executeTool, options, heartbeat);
+    for await (const event of this.chatStream(messages, options)) {
+      heartbeat?.();
+      if (event.type === 'text') {
+        nextContent += event.text;
+      } else if (event.type === 'done') {
+        nextMessage = event.message;
+        const msg = event.message as { choices?: Array<{ message?: { tool_calls?: typeof nextToolCalls } }> };
+        nextToolCalls = msg.choices?.[0]?.message?.tool_calls || [];
+      }
     }
 
-    return nextMessage?.content || '';
+    // 检查是否有新的工具调用
+    if (nextToolCalls.length > 0) {
+      return this.handleToolUse(nextMessage, messages, executeTool, options, heartbeat);
+    }
+
+    return nextContent || '';
   },
 
   getModel(): string {

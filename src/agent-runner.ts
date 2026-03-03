@@ -660,6 +660,8 @@ async function runAgentOnce(
     let responseText = '';
     let stopReason: string | null = null;
     let usage: { input_tokens: number; output_tokens: number } | null = null;
+    // 保存流式收集的完整消息对象（用于工具调用，避免重复 API 请求）
+    let streamedMessage: unknown = null;
 
     logger.info({ group: group.folder }, '⚡ 开始流式请求');
 
@@ -678,8 +680,12 @@ async function runAgentOnce(
       if (event.type === 'text') {
         responseText += event.text;
         input.onToken?.(event.text);
+      } else if (event.type === 'tool_use') {
+        // 通知工具调用（用于 CLI/Web UI 显示）
+        input.onToolUse?.(event.name, event.input);
       } else if (event.type === 'done') {
-        // 从 event.message 中提取 stop_reason 和 usage
+        // 保存完整消息对象（包含 tool_use blocks），用于后续 handleToolUse
+        streamedMessage = event.message;
         const msg = event.message as Anthropic.Message;
         stopReason = msg.stop_reason || null;
         usage = msg.usage || null;
@@ -718,19 +724,11 @@ async function runAgentOnce(
     // 检查是否有工具调用
     // 兼容不同 provider 的 stop_reason：Anthropic 用 'tool_use'，OpenAI/Ollama 用 'tool_calls'
     if (stopReason === 'tool_use' || stopReason === 'tool_calls') {
-      // 处理工具调用（使用活动超时 + 心跳）
-      // 直接使用 provider 的 handleToolUse 方法处理（兼容不同 provider 格式）
+      // 直接使用流式收集的完整消息对象，不再重复发送 API 请求
       resetActivityTimeout();
 
-      // 获取完整响应用于工具调用
-      const chatResponse = await apiProvider.chat(messages, {
-        system: systemPrompt,
-        tools,
-        maxTokens: AI_MAX_OUTPUT_TOKENS
-      });
-
       result = await apiProvider.handleToolUse(
-        chatResponse,
+        streamedMessage,
         messages,
         async (name, params) => {
           resetActivityTimeout(); // 工具执行时也重置超时

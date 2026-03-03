@@ -143,7 +143,7 @@
 
 | 优先级 | 问题 | 位置 | 状态 |
 |--------|------|------|------|
-| P0 | 工具调用重复 API 请求 — 流式检测到 `tool_use` 后又发一次 `chat()` 非流式请求，浪费 token | `agent-runner.ts:720-731` | 待修复 |
+| P0 | 工具调用重复 API 请求 — 流式检测到 `tool_use` 后又发一次 `chat()` 非流式请求，浪费 token | `agent-runner.ts:720-731` | ✅ 已修复 |
 | P0 | 默认模型 ID 不一致 — `getCurrentModelId()` 默认 `claude-4-5-sonnet-20250929`，`config.ts` 默认 `claude-sonnet-4-20250514` | `model-capabilities.ts:128` vs `config.ts:24` | 待修复 |
 | P0 | 上下文阈值无效 — `CONTEXT_MIN_TOKENS` 和 `CONTEXT_WARN_TOKENS` 默认都是 16000，warning 永远不会单独触发 | `context-guard.ts:17-19` | 待修复 |
 | P0 | 任务超时 Promise 泄漏 — `setTimeout` ID 未保存，任务正常完成后定时器仍存在 | `task-scheduler.ts:236-239` | 待修复 |
@@ -157,6 +157,7 @@
 | P1 | `loadPluginsConfig()` 每次调用都重新读文件 — 加载 20+ 插件时读磁盘 20+ 次 | `plugins/loader.ts:55-66` | 待优化 |
 | P1 | 全局变量过多 — 6+ 个 `global.__flashclaw_*`，应统一到一个命名空间对象 | 多处 | 待重构 |
 | P1 | `send-message` 插件文件路径读取安全隐患 — AI 可传入任意路径读取系统文件 | `send-message/index.ts:106-117` | 待修复 |
+| P1 | openai-provider `handleToolUse` 后续调用使用非流式 `chat()`，本地模型更慢 | `openai-provider/index.ts:325` | ✅ 已修复 |
 
 ### 🟢 P2 — 建议改进
 
