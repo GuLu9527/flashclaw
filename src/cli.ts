@@ -556,7 +556,7 @@ async function main(): Promise<void> {
     case 'cli': {
       const { startInkCli } = await import('./cli-ink.js');
       await startInkCli({
-        apiUrl: typeof flags['url'] === 'string' ? flags['url'] as string : 'http://127.0.0.1:3000',
+        apiUrl: typeof flags['url'] === 'string' ? flags['url'] as string : `http://127.0.0.1:${process.env.CLI_PORT || '3001'}`,
         group: typeof flags['group'] === 'string' ? flags['group'] as string : 'main',
         version: VERSION,
         botName: process.env.BOT_NAME || 'FlashClaw',

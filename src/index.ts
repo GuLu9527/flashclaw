@@ -64,7 +64,7 @@ import {
 } from './db.js';
 import { startSchedulerLoop, stopScheduler, wake } from './task-scheduler.js';
 import { startHealthServer, stopHealthServer } from './health.js';
-import { runAgent, writeTasksSnapshot, writeGroupsSnapshot, AvailableGroup } from './agent-runner.js';
+import { runAgent, writeTasksSnapshot, writeGroupsSnapshot, AvailableGroup, AgentRunMetrics } from './agent-runner.js';
 import { loadJson, saveJson } from './utils.js';
 import { MessageQueue, QueuedMessage } from './message-queue.js';
 import { isCommand, handleCommand, CommandContext, shouldSuggestCompact, getCompactSuggestion } from './commands.js';
@@ -395,11 +395,12 @@ async function processQueuedMessage(queuedMsg: QueuedMessage<Message>): Promise<
   }, THINKING_THRESHOLD_MS) : null;
 
   try {
-    const response = await executeAgent(group, prompt, chatId, {
+    const agentResult = await executeAgent(group, prompt, chatId, {
       attachments: imageAttachments.length > 0 ? imageAttachments : undefined,
       userId: msg.senderId,  // 传递用户 ID 用于用户级别记忆
       platform: msg.platform
     });
+    const response = agentResult.result;
     thinkingDone = true;
     
     if (thinkingTimer) {
@@ -645,12 +646,13 @@ async function handleIncomingMessage(msg: Message): Promise<void> {
       compactSession: async () => {
         // 压缩会话：让 AI 总结当前对话，然后重置会话
         try {
-          const summary = await executeAgent(
+          const compactResult = await executeAgent(
             group,
             '请用 2-3 句话总结我们之前的对话要点，以便我们继续对话时能快速回顾。只输出总结，不要其他内容。',
             chatId,
             { userId: msg.senderId, platform: msg.platform }
           );
+          const summary = compactResult.result;
           
           // 重置会话和 tracker
           if (sessions[group.folder]) {
@@ -712,9 +714,16 @@ interface ExecuteAgentOptions {
   attachments?: { type: 'image'; content: string; mimeType?: string }[];
   userId?: string;  // 用户 ID，用于用户级别记忆
   platform?: string;  // 消息来源平台
+  onToken?: (chunk: string) => void;  // 流式输出回调
+  onToolUse?: (name: string, input: unknown) => void;  // 工具调用回调
 }
 
-async function executeAgent(group: RegisteredGroup, prompt: string, chatId: string, options?: ExecuteAgentOptions): Promise<string | null> {
+interface ExecuteAgentResult {
+  result: string | null;
+  metrics?: AgentRunMetrics;
+}
+
+async function executeAgent(group: RegisteredGroup, prompt: string, chatId: string, options?: ExecuteAgentOptions): Promise<ExecuteAgentResult> {
   const isMain = group.folder === MAIN_GROUP_FOLDER;
   const sessionId = sessions[group.folder];
 
@@ -743,7 +752,9 @@ async function executeAgent(group: RegisteredGroup, prompt: string, chatId: stri
       isMain,
       userId: options?.userId || chatId,  // 用户级别记忆
       platform: options?.platform,
-      attachments: options?.attachments
+      attachments: options?.attachments,
+      onToken: options?.onToken,
+      onToolUse: options?.onToolUse,
     });
 
     if (output.newSessionId) {
@@ -756,7 +767,7 @@ async function executeAgent(group: RegisteredGroup, prompt: string, chatId: stri
       throw new Error(`Agent 错误: ${output.error}`);
     }
 
-    return output.result;
+    return { result: output.result, metrics: output.metrics };
   } catch (err) {
     logger.error({ group: group.folder, err }, 'Agent 执行失败');
     throw err;
@@ -1292,7 +1303,24 @@ ${envExists
   // 加载状态
   loadState();
   
-  // 注入全局变量，供 Web UI 等插件使用
+  // 初始化核心 API 层（所有渠道的统一入口）
+  const { initCoreApi } = await import('./core-api.js');
+  const mainStartTime = Date.now();
+  initCoreApi({
+    executeAgent,
+    getRegisteredGroups: () => registeredGroups,
+    getSessions: () => sessions,
+    resetSession: (folder: string) => {
+      if (sessions[folder]) delete sessions[folder];
+    },
+    getStartTime: () => mainStartTime,
+  });
+
+  // 暴露核心 API 供插件使用（替代多个分散的 global 变量）
+  const coreApi = await import('./core-api.js');
+  global.__flashclaw_core_api = coreApi;
+
+  // 注入全局变量，供 Web UI 等插件使用（向后兼容，Phase 3 后可移除）
   global.__flashclaw_run_agent = runAgent;
   global.__flashclaw_registered_groups = new Map(Object.entries(registeredGroups));
 
