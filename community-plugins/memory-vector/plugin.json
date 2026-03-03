@@ -1,0 +1,7 @@
+{
+  "name": "memory-vector",
+  "version": "1.0.0",
+  "type": "tool",
+  "description": "语义记忆搜索 - 基于 Ollama embedding 的模糊召回",
+  "main": "index.ts"
+}

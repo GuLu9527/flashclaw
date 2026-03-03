@@ -669,6 +669,16 @@ export class MemoryManager {
       };
     }
     
+    // ==================== 压缩前记忆 Flush ====================
+    // 参考 OpenClaw memoryFlush：在压缩前让 AI 提取重要信息写入长期记忆
+    // 避免压缩时丢失用户偏好、重要决定等关键事实
+    try {
+      await this.flushMemoryBeforeCompact(groupId, toCompress, client);
+    } catch (error) {
+      // Flush 失败不阻塞压缩流程
+      logger.warn({ error, groupId }, '📦 压缩前记忆 Flush 失败，继续压缩');
+    }
+    
     // 生成摘要
     let summary = '';
     try {
@@ -712,6 +722,84 @@ export class MemoryManager {
     };
   }
   
+  /**
+   * 压缩前记忆 Flush
+   * 参考 OpenClaw memoryFlush：让 AI 从即将被压缩的消息中提取重要信息写入长期记忆
+   * 
+   * @param groupId - 群组 ID
+   * @param toCompress - 即将被压缩的消息
+   * @param client - AI 客户端
+   */
+  private async flushMemoryBeforeCompact(
+    groupId: string,
+    toCompress: ChatMessage[],
+    client: AIClient
+  ): Promise<void> {
+    // 格式化即将被压缩的消息
+    const conversationText = toCompress
+      .map(msg => `${msg.role === 'user' ? '用户' : '助手'}: ${extractTextContent(msg.content)}`)
+      .join('\n\n');
+
+    // 获取当前已有的长期记忆（避免重复提取）
+    const existingMemories = this.recall(groupId);
+
+    const response = await client.chat(
+      [
+        {
+          role: 'user',
+          content: `以下对话即将被压缩。请从中提取需要长期记住的关键事实，每行一条，格式为 "key: value"。
+
+只提取以下类型信息：
+- 用户偏好（喜好、习惯）
+- 重要决定或约定
+- 关键事实（姓名、身份、联系方式等）
+- 用户明确要求记住的内容
+
+${existingMemories ? `已有记忆（不要重复）：\n${existingMemories}\n\n` : ''}对话内容：
+${conversationText}
+
+如果没有值得记住的新信息，只回复 "NONE"。
+否则每行输出一条：key: value`,
+        },
+      ],
+      {
+        system: '你是记忆提取助手。从对话中识别重要的持久化信息，输出简洁的 key-value 对。',
+        maxTokens: 512,
+        temperature: 0.2,
+      }
+    );
+
+    const result = extractResponseText(response, client).trim();
+
+    // 如果 AI 返回 NONE 或空内容，跳过
+    if (!result || result.toUpperCase() === 'NONE') {
+      logger.debug({ groupId }, '📦 Flush: 无需保存的新记忆');
+      return;
+    }
+
+    // 解析 key: value 格式并写入长期记忆
+    let savedCount = 0;
+    for (const line of result.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.toUpperCase() === 'NONE') continue;
+
+      // 匹配 "key: value" 或 "key：value"（中英文冒号）
+      const match = trimmed.match(/^([^:：]+)[：:]\s*(.+)$/);
+      if (match) {
+        const key = match[1].trim().replace(/^[-*•]\s*/, ''); // 去除列表符号
+        const value = match[2].trim();
+        if (key && value) {
+          this.remember(groupId, key, value);
+          savedCount++;
+        }
+      }
+    }
+
+    if (savedCount > 0) {
+      logger.info({ groupId, savedCount }, '📦 Flush: 压缩前已保存记忆');
+    }
+  }
+
   /**
    * 生成对话摘要
    *
@@ -792,9 +880,54 @@ ${conversationText}
       parts.push(`\n## 关于这个群组/用户的记忆\n${memories}`);
     }
     
+    // 添加近期每日日志（今天 + 昨天）
+    const dailyLogs = this.loadRecentDailyLogs();
+    if (dailyLogs) {
+      parts.push(`\n## 近期日志\n${dailyLogs}`);
+    }
+    
     return parts.join('\n\n');
   }
   
+  /**
+   * 加载近期每日日志（今天 + 昨天）
+   * 参考 OpenClaw 的 memory/YYYY-MM-DD.md 设计
+   * 
+   * @returns 日志内容，如果没有则返回空字符串
+   */
+  private loadRecentDailyLogs(): string {
+    const dailyDir = path.join(this.config.memoryDir, 'daily');
+    if (!fs.existsSync(dailyDir)) {
+      return '';
+    }
+
+    const today = new Date();
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+
+    const dates = [
+      today.toISOString().split('T')[0],
+      yesterday.toISOString().split('T')[0],
+    ];
+
+    const logs: string[] = [];
+    for (const date of dates) {
+      const logFile = path.join(dailyDir, `${date}.md`);
+      if (fs.existsSync(logFile)) {
+        try {
+          const content = fs.readFileSync(logFile, 'utf-8').trim();
+          if (content) {
+            logs.push(content);
+          }
+        } catch {
+          // 读取失败，跳过
+        }
+      }
+    }
+
+    return logs.join('\n\n');
+  }
+
   // ==================== 持久化 ====================
   
   /**

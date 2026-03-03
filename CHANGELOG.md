@@ -6,6 +6,11 @@
 
 ## [Unreleased]
 
+### 新增
+- **压缩前记忆 Flush** — 压缩对话上下文前自动让 AI 提取重要信息（用户偏好、关键事实）写入长期记忆，避免压缩时丢失重要信息（参考 OpenClaw memoryFlush）
+- **每日日志** — memory 插件新增 `log` action，支持追加式每日日志（`data/memory/daily/YYYY-MM-DD.md`），启动时自动加载今天和昨天的日志到系统提示词
+- **语义记忆搜索** — 新增 `memory-vector` 内置插件，基于 Ollama embedding 的模糊召回，支持自然语言搜索长期记忆和每日日志
+
 ### 修复
 - **P0: 工具调用重复 API 请求** — `agent-runner.ts` 流式检测到 `tool_use` 后不再重复发送 `chat()` 请求，直接复用流式收集的完整消息对象，工具调用场景响应时间减半
 - **P1: openai-provider 工具链改用流式** — `handleToolUse` 后续调用从非流式 `chat()` 改为流式 `chatStream()`，本地模型（Ollama）可边生成边返回

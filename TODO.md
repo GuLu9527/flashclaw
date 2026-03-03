@@ -1,11 +1,17 @@
 # FlashClaw 开发路线图
 
-> 当前版本: v1.7.0
-> 更新时间: 2026-03-01
+> 当前版本: v1.7.1
+> 更新时间: 2026-03-03
 
 ---
 
 ## P0 - 核心功能 (2026-03 重点)
+
+### 0. 记忆系统增强（参考 OpenClaw / Mem0）
+- [ ] **压缩前记忆 Flush** — 压缩前静默触发 AI 轮次，让 AI 主动将重要信息写入长期记忆（学习 OpenClaw memoryFlush）
+- [ ] **语义搜索** — 新插件 `memory-vector`，基于 Ollama embedding + SQLite 向量索引，支持模糊召回（学习 OpenClaw memory_search）
+- [ ] **每日日志** — 扩展 memory 插件，支持 `memory/YYYY-MM-DD.md` 追加式日志，启动时自动加载近期日志
+- [ ] **自动记忆提取** — 新插件 `memory-extract`，对话结束时自动提取关键事实（用户偏好、重要决定），无需 AI 显式调用 remember
 
 ### 1. AI Provider 插件化完善
 - [x] ollama-provider - 本地 Ollama 支持 (通过 openai-provider 配置 OPENAI_BASE_URL=http://localhost:11434/v1)

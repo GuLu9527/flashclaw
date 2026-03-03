@@ -5,16 +5,18 @@
 
 import { ToolPlugin, ToolContext, ToolResult } from '../../src/plugins/types.js';
 import { getMemoryManager } from '../../src/core/memory.js';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 
 /**
  * 记忆操作参数
  */
 interface MemoryParams {
-  /** 操作类型：remember（记住）或 recall（回忆） */
-  action: 'remember' | 'recall';
+  /** 操作类型：remember（记住）、recall（回忆）或 log（追加每日日志） */
+  action: 'remember' | 'recall' | 'log';
   /** 记忆键（remember 必需，recall 可选） */
   key?: string;
-  /** 记忆值（remember 必需） */
+  /** 记忆值（remember 必需）/ 日志内容（log 必需） */
   value?: string;
   /** 作用域：user（用户级别，跨会话共享）或 group（会话级别，默认） */
   scope?: 'user' | 'group';
@@ -22,27 +24,28 @@ interface MemoryParams {
 
 const plugin: ToolPlugin = {
   name: 'memory',
-  version: '1.0.0',
-  description: '长期记忆管理，可以记住和回忆重要信息',
+  version: '1.1.0',
+  description: '长期记忆管理，可以记住、回忆重要信息，以及写入每日日志',
   
   schema: {
     name: 'memory',
-    description: `管理长期记忆。支持两种操作：
-- remember: 保存重要信息到长期记忆（用户偏好、重要事实等）
-- recall: 回忆之前保存的信息
+    description: `管理长期记忆和每日日志。
 
-支持两种作用域：
-- user: 用户级别记忆，跨所有会话共享（推荐用于个人偏好）
-- group: 会话级别记忆，仅在当前会话有效（默认）
+**何时用 remember**: 保存持久事实（姓名、偏好、配置等），需要 key 和 value
+**何时用 recall**: 查询之前保存的事实
+**何时用 log**: 记录事件、笔记、动态（"今天做了XX"、"开了会"、"学了XX"），自动按日期归档，无需 key
 
-记忆会持久化到文件，跨会话保持。`,
+示例：
+- "记住我叫张三" → remember(key="name", value="张三")
+- "帮我记录今天开了会" → log(value="今天开了会")
+- "我叫什么" → recall(key="name")`,
     input_schema: {
       type: 'object',
       properties: {
         action: {
           type: 'string',
-          enum: ['remember', 'recall'],
-          description: 'remember 保存信息，recall 回忆信息'
+          enum: ['remember', 'recall', 'log'],
+          description: 'remember 保存信息，recall 回忆信息，log 追加每日日志'
         },
         key: {
           type: 'string',
@@ -180,9 +183,56 @@ const plugin: ToolPlugin = {
       }
     }
     
+    if (action === 'log') {
+      // 追加每日日志
+      if (!value || typeof value !== 'string') {
+        return {
+          success: false,
+          error: 'log 操作需要提供 value（日志内容）'
+        };
+      }
+      
+      try {
+        const mm = getMemoryManager();
+        const memoryDir = (mm as unknown as { config: { memoryDir: string } }).config.memoryDir;
+        const logsDir = path.join(memoryDir, 'daily');
+        if (!fs.existsSync(logsDir)) {
+          fs.mkdirSync(logsDir, { recursive: true });
+        }
+        
+        const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+        const logFile = path.join(logsDir, `${today}.md`);
+        const time = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+        const entry = `- [${time}] ${value}\n`;
+        
+        // 如果文件不存在，添加标题
+        if (!fs.existsSync(logFile)) {
+          fs.writeFileSync(logFile, `# ${today} 日志\n\n${entry}`, 'utf-8');
+        } else {
+          fs.appendFileSync(logFile, entry, 'utf-8');
+        }
+        
+        return {
+          success: true,
+          data: {
+            action: 'logged',
+            date: today,
+            time,
+            content: value,
+            message: `已记录到 ${today} 日志`
+          }
+        };
+      } catch (error) {
+        return {
+          success: false,
+          error: `写入日志失败: ${error instanceof Error ? error.message : String(error)}`
+        };
+      }
+    }
+    
     return {
       success: false,
-      error: 'action 必须是 remember 或 recall'
+      error: 'action 必须是 remember、recall 或 log'
     };
   }
 };
