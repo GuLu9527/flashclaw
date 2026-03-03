@@ -32,12 +32,22 @@
         └──────────────────────────────┘
 ```
 
-**改动要点：**
-- [ ] 抽取核心 API 层 — 将 `index.ts` 中的消息处理、命令处理、Agent 调用封装为统一接口
-- [ ] 所有渠道插件统一通过核心 API 层通信，不互相依赖
-- [ ] CLI 渠道从依赖 web-ui HTTP API 改为直接调用核心接口
-- [ ] web-ui 变为纯 UI 层，也通过核心 API 层调用
-- [ ] `/compact`、`/status`、`/new` 等命令统一由核心处理，渠道只做消息转发
+**执行计划：**
+
+**Phase 1：抽取核心 API 层（最关键）**
+- [ ] 新增 `src/core-api.ts` — 统一接口：`processMessage()` / `executeCommand()` / `chat()` / `getStatus()` / `compactSession()` 等
+- [ ] 修改 `src/index.ts` — `handleIncomingMessage` 改为调用 core-api，暴露 `global.__flashclaw_core_api`
+
+**Phase 2：改造 CLI（解决当前耦合痛点）**
+- [ ] 改造 `plugins/cli-channel/index.ts` — 从空壳改为真正的渠道插件，启动 HTTP/WS 服务供 CLI 连接，直接调用 core-api
+- [ ] 修改 `src/cli.ts` — CLI 客户端连接 cli-channel（而非 web-ui），`/compact` 等命令走 cli-channel 路由
+
+**Phase 3：改造 web-ui（消除 global 依赖）**
+- [ ] 修改 `web-ui/server/services/chat.ts` — 从直接读 `global.__flashclaw_run_agent` 改为调用 core-api
+- [ ] 修改 `web-ui/server/services/status.ts` — 从直接读 global 改为调用 core-api
+
+**Phase 4：清理**
+- [ ] 减少 `global.__flashclaw_*` 变量 — 只保留 `global.__flashclaw_core_api`，其他通过它访问
 
 ### 1. AI Provider 插件化完善
 - [x] ollama-provider - 本地 Ollama 支持 (通过 openai-provider 配置 OPENAI_BASE_URL=http://localhost:11434/v1)
