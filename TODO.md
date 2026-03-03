@@ -8,10 +8,36 @@
 ## P0 - 核心功能 (2026-03 重点)
 
 ### 0. 记忆系统增强（参考 OpenClaw / Mem0）
-- [ ] **压缩前记忆 Flush** — 压缩前静默触发 AI 轮次，让 AI 主动将重要信息写入长期记忆（学习 OpenClaw memoryFlush）
-- [ ] **语义搜索** — 新插件 `memory-vector`，基于 Ollama embedding + SQLite 向量索引，支持模糊召回（学习 OpenClaw memory_search）
-- [ ] **每日日志** — 扩展 memory 插件，支持 `memory/YYYY-MM-DD.md` 追加式日志，启动时自动加载近期日志
-- [ ] **自动记忆提取** — 新插件 `memory-extract`，对话结束时自动提取关键事实（用户偏好、重要决定），无需 AI 显式调用 remember
+- [x] **压缩前记忆 Flush** — 压缩前 AI 自动提取重要信息写入长期记忆（参考 OpenClaw memoryFlush）
+- [x] **语义搜索** — 社区插件 `memory-vector`，基于 Ollama embedding 的模糊召回
+- [x] **每日日志** — memory 插件新增 `log` action，支持 `data/memory/daily/YYYY-MM-DD.md`，启动时自动加载今天+昨天日志
+- [ ] **自动记忆提取** — 暂缓（P0 Flush 已覆盖压缩时提取，每次对话后提取对小模型成本太高）
+
+### 0.5 渠道架构解耦（重新设计）
+
+当前问题：CLI 渠道通过 web-ui 的 HTTP API 与核心通信，导致渠道之间存在耦合。
+
+**目标架构：**
+```
+┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+│   CLI 渠道    │  │  飞书渠道    │  │ Telegram 渠道 │
+└───────┬──────┘  └───────┬──────┘  └───────┬──────┘
+        │                │                │
+        └────────┬───────┘                │
+                │                        │
+        ┌───────┴────────────────┴───────┐
+        │     核心 API 层（新增）            │
+        │  handleCommand() / runAgent()  │
+        │  消息队列 / 记忆 / 压缩        │
+        └──────────────────────────────┘
+```
+
+**改动要点：**
+- [ ] 抽取核心 API 层 — 将 `index.ts` 中的消息处理、命令处理、Agent 调用封装为统一接口
+- [ ] 所有渠道插件统一通过核心 API 层通信，不互相依赖
+- [ ] CLI 渠道从依赖 web-ui HTTP API 改为直接调用核心接口
+- [ ] web-ui 变为纯 UI 层，也通过核心 API 层调用
+- [ ] `/compact`、`/status`、`/new` 等命令统一由核心处理，渠道只做消息转发
 
 ### 1. AI Provider 插件化完善
 - [x] ollama-provider - 本地 Ollama 支持 (通过 openai-provider 配置 OPENAI_BASE_URL=http://localhost:11434/v1)
@@ -19,7 +45,7 @@
 - [x] siliconflow-provider - 硅基流动 API 支持 (通过 openai-provider 配置 OPENAI_BASE_URL=https://api.siliconflow.cn/v1)
 - [x] qianwen-provider - 通义千问 API 支持 (通过 openai-provider 配置 OPENAI_BASE_URL 需使用 DashScope)
 
-### 2. 轻量 ReAct 自主循环
+### 3. 轻量 ReAct 自主循环
 - [ ] 核心增加 ReAct 循环逻辑（maxReactRounds: 3）
 - [ ] web_search 工具（简单搜索）
 - [ ] local_file_read 工具（本地文件读取）
