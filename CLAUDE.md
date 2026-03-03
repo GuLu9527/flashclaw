@@ -400,7 +400,8 @@ export default plugin;
    - 先更新 CHANGELOG 版本号，再执行 `npm version x.x.x`（会自动更新 package.json 和 git tag）
    - 最后执行 `git push && npm publish`
 10. **plugin.json 依赖声明** - `dependencies` 字段仅用于声明插件依赖（其他插件），npm 包依赖通过插件目录内的 `npm install` 安装，无需在 plugin.json 中声明
-11. **小模型友好** - 项目必须在 4B 参数的本地小模型上也能流畅运行，不过度依赖模型能力
+11. **先测试再提交** - 修改代码后必须先 `npm run build` + `npm run typecheck` + `npm test`，然后等待用户本地测试确认功能正常后再 git commit，绝不能在用户未测试前提交
+12. **小模型友好** - 项目必须在 4B 参数的本地小模型上也能流畅运行，不过度依赖模型能力
     - 工具 schema description 要写清楚使用场景和示例，帮助小模型正确选择工具
     - 避免需要模型"理解言外之意"的设计，用明确的代码逻辑替代
     - 系统提示词精简，减少工具定义对小模型上下文的占用

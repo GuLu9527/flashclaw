@@ -43,7 +43,7 @@ interface CliAppProps {
 }
 
 interface ChatMessage {
-  role: 'user' | 'assistant' | 'tool' | 'metrics' | 'streaming';
+  role: 'user' | 'assistant' | 'tool' | 'metrics' | 'streaming' | 'thinking';
   content: string;
 }
 
@@ -109,7 +109,7 @@ function Header({ version, model }: { version: string; model: string }) {
 
 // ==================== 消息显示组件 ====================
 
-function MessageView({ messages, botName }: { messages: ChatMessage[]; botName: string }) {
+function MessageView({ messages, botName, showThinking }: { messages: ChatMessage[]; botName: string; showThinking: boolean }) {
   return (
     <Box flexDirection="column">
       {messages.map((msg, i) => {
@@ -118,6 +118,27 @@ function MessageView({ messages, botName }: { messages: ChatMessage[]; botName: 
             <Box key={i} marginTop={1}>
               <Text bold color={GOLD}>❯ </Text>
               <Text bold>{msg.content}</Text>
+            </Box>
+          );
+        }
+        if (msg.role === 'thinking') {
+          if (!showThinking) {
+            // 折叠模式：显示一行摘要
+            const charCount = msg.content.length;
+            return (
+              <Box key={i} paddingLeft={2}>
+                <Text dimColor>💭 思考中… ({charCount} 字)  </Text>
+                <Text dimColor italic>Ctrl+T 展开</Text>
+              </Box>
+            );
+          }
+          // 展开模式：显示完整思考内容
+          return (
+            <Box key={i} flexDirection="column" paddingLeft={2}>
+              <Text dimColor>💭 思考过程：</Text>
+              {msg.content.split('\n').map((line, j) => (
+                <Text key={j} dimColor>  {line}</Text>
+              ))}
             </Box>
           );
         }
@@ -271,8 +292,8 @@ function ContextBar({ used, max }: { used: number; max: number }) {
   );
 }
 
-function StatusBar({ group, model, extra, contextUsed, contextMax }: {
-  group: string; model: string; extra?: string;
+function StatusBar({ group, model, contextUsed, contextMax }: {
+  group: string; model: string;
   contextUsed: number; contextMax: number;
 }) {
   const ctxLabel = contextMax > 0
@@ -293,12 +314,6 @@ function StatusBar({ group, model, extra, contextUsed, contextMax }: {
           <ContextBar used={contextUsed} max={contextMax} />
         </>
       ) : null}
-      {extra ? (
-        <>
-          <Text dimColor> | </Text>
-          <Text color={GOLD}>{extra}</Text>
-        </>
-      ) : null}
     </Box>
   );
 }
@@ -310,11 +325,12 @@ function App({ apiUrl, group, version, botName = 'FlashClaw' }: CliAppProps) {
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [busy, setBusy] = useState(false);
-  const [statusExtra, setStatusExtra] = useState<string | undefined>();
+  const [receivedThinking, setReceivedThinking] = useState(false);
   const [currentModel, setCurrentModel] = useState('-');
   const [currentProvider, setCurrentProvider] = useState('-');
   const [contextUsed, setContextUsed] = useState(0);
   const [contextMax, setContextMax] = useState(0);
+  const [showThinking, setShowThinking] = useState(false);
 
   // 启动时检查服务
   useEffect(() => {
@@ -337,11 +353,14 @@ function App({ apiUrl, group, version, botName = 'FlashClaw' }: CliAppProps) {
     })();
   }, []);
 
-  // Ctrl+C 退出
+  // Ctrl+C 退出，Ctrl+T 切换 thinking 显示
   useInput((_input, key) => {
     if (key.ctrl && _input === 'c') {
       exit();
       setTimeout(() => process.exit(0), UI.EXIT_DELAY_MS);
+    }
+    if (key.ctrl && _input === 't') {
+      setShowThinking(prev => !prev);
     }
   });
 
@@ -388,7 +407,6 @@ function App({ apiUrl, group, version, botName = 'FlashClaw' }: CliAppProps) {
     // 发送消息
     setMessages(prev => [...prev, { role: 'user', content: trimmed }]);
     setBusy(true);
-    setStatusExtra('思考中...');
 
     try {
       const response = await fetch(`${apiUrl}${API.CHAT_STREAM}`, {
@@ -406,9 +424,11 @@ function App({ apiUrl, group, version, botName = 'FlashClaw' }: CliAppProps) {
       let responseText = '';
       let streamMetrics: StreamMetrics | null = null;
 
-      setStatusExtra('接收中...');
+      setReceivedThinking(false);
 
-      // 添加流式消息占位
+      // 添加流式消息占位（thinking + streaming）
+      // 用唯一 thinkingId 标记本次对话的 thinking，避免与之前对话的 thinking 叠加
+      const thinkingId = `thinking-${Date.now()}`;
       setMessages(prev => [...prev, { role: 'streaming', content: '' }]);
 
       while (true) {
@@ -416,8 +436,37 @@ function App({ apiUrl, group, version, botName = 'FlashClaw' }: CliAppProps) {
         if (done) break;
         const chunk = decoder.decode(value, { stream: true });
 
+        // 思考过程（[THINKING:text] 标记）
+        const thinkingRegex = /\[THINKING:([^\]]*)\]/g;
+        let thinkingMatch;
+        let hasThinking = false;
+        let cleanChunk = chunk;
+        while ((thinkingMatch = thinkingRegex.exec(chunk)) !== null) {
+          hasThinking = true;
+          const thinkText = thinkingMatch[1];
+          setReceivedThinking(true);
+          // 实时更新本次对话的 thinking 消息
+          setMessages(prev => {
+            const msgs = [...prev];
+            // 只查找 streaming 消息紧前的 thinking（本次对话的）
+            const streamIdx = msgs.findLastIndex(m => m.role === 'streaming');
+            if (streamIdx < 0) return msgs;
+            const thinkIdx = streamIdx > 0 && msgs[streamIdx - 1]?.role === 'thinking' ? streamIdx - 1 : -1;
+            if (thinkIdx >= 0) {
+              msgs[thinkIdx] = { role: 'thinking', content: msgs[thinkIdx].content + thinkText };
+            } else {
+              msgs.splice(streamIdx, 0, { role: 'thinking', content: thinkText });
+            }
+            return msgs;
+          });
+        }
+        if (hasThinking) {
+          cleanChunk = chunk.replace(/\[THINKING:[^\]]*\]/g, '');
+          if (!cleanChunk.trim()) continue;
+        }
+
         // 工具调用
-        const toolMatch = chunk.match(/\[TOOL:({.*?})\]/);
+        const toolMatch = cleanChunk.match(/\[TOOL:({.*?})\]/);
         if (toolMatch) {
           try {
             const ti = JSON.parse(toolMatch[1]) as { name: string; input?: Record<string, unknown> };
@@ -433,23 +482,23 @@ function App({ apiUrl, group, version, botName = 'FlashClaw' }: CliAppProps) {
               if (streamIdx >= 0) msgs.splice(streamIdx, 0, { role: 'tool', content: `${ti.name}(${params})` });
               return msgs;
             });
-            responseText += chunk.replace(/\[TOOL:.*?\]/g, '');
+            responseText += cleanChunk.replace(/\[TOOL:.*?\]/g, '');
             continue;
           } catch { /* fall through */ }
         }
 
-        const metricsMatch = chunk.match(/\[METRICS:({.*?})\]/);
+        const metricsMatch = cleanChunk.match(/\[METRICS:({.*?})\]/);
         if (metricsMatch) {
           try {
             streamMetrics = JSON.parse(metricsMatch[1]) as StreamMetrics;
             if (streamMetrics?.model) setCurrentModel(streamMetrics.model);
-            const clean = chunk.replace(/\[METRICS:.*?\]/g, '');
+            const clean = cleanChunk.replace(/\[METRICS:.*?\]/g, '');
             if (clean) responseText += clean;
             continue;
           } catch { /* fall through */ }
         }
 
-        responseText += chunk;
+        responseText += cleanChunk;
         // 实时更新流式显示
         const currentText = responseText;
         setMessages(prev => {
@@ -492,7 +541,6 @@ function App({ apiUrl, group, version, botName = 'FlashClaw' }: CliAppProps) {
     }
 
     setBusy(false);
-    setStatusExtra(undefined);
   }, [apiUrl, group]);
 
   return (
@@ -513,8 +561,8 @@ function App({ apiUrl, group, version, botName = 'FlashClaw' }: CliAppProps) {
 
       {/* Messages */}
       <Box flexDirection="column" flexGrow={1}>
-        <MessageView messages={messages} botName={botName} />
-        {busy && <Spinner label="思考中..." />}
+        <MessageView messages={messages} botName={botName} showThinking={showThinking} />
+        {busy && !receivedThinking && <Spinner label="接收中..." />}
       </Box>
 
       {/* Input */}
@@ -523,7 +571,7 @@ function App({ apiUrl, group, version, botName = 'FlashClaw' }: CliAppProps) {
       </Box>
 
       {/* Status bar */}
-      <StatusBar group={group} model={modelDisplay} extra={statusExtra}
+      <StatusBar group={group} model={modelDisplay}
         contextUsed={contextUsed} contextMax={contextMax} />
     </Box>
   );
