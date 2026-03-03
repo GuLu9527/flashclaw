@@ -90,9 +90,10 @@
 ## P2 - 完善功能
 
 ### 5. CLI REPL 增强
-- [ ] 上下箭头历史浏览
-- [ ] Tab 命令补全
-- [ ] Markdown 渲染
+- [x] 上下箭头历史浏览（cli-ink.tsx React + Ink）
+- [x] Tab 命令补全（cli-ink.tsx）
+- [x] Markdown 渲染（cli-ink.tsx）
+- [x] 模型思考过程显示（Ctrl+T 折叠/展开）
 - [ ] 语音输入（macOS say）
 
 ### 6. 每日/每周报告
