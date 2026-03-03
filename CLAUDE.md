@@ -435,6 +435,7 @@ tests/
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| 1.8.0 | 2026-03-03 | 核心 API 层、渠道解耦、CLI Ink、记忆增强、启动日志精简 |
 | 1.7.1 | 2026-03-03 | CLI Token TPS 统计、上下文阈值修复、日志字段统一 |
 | 1.7.0 | 2026-03-01 | AI Provider 插件化，内置 Anthropic Provider，社区 OpenAI Provider |
 | 1.6.0 | 2026-02-28 | CLI 渠道插件，Agent onToolUse 回调 |

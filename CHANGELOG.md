@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-03-03
+
 ### 新增
 - **核心 API 层** (`src/core-api.ts`) — 所有渠道（CLI、飞书、Telegram、Web UI）的统一入口，提供 `chat()`、`getStatus()`、`compactSession()` 等接口
 - **CLI 渠道独立 HTTP 服务** — `cli-channel` 从空壳改为真正的渠道插件（端口 3001），通过核心 API 层处理消息，不再依赖 web-ui
