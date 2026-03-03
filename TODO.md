@@ -56,6 +56,15 @@
 - [x] siliconflow-provider - 硅基流动 API 支持 (通过 openai-provider 配置 OPENAI_BASE_URL=https://api.siliconflow.cn/v1)
 - [x] qianwen-provider - 通义千问 API 支持 (通过 openai-provider 配置 OPENAI_BASE_URL 需使用 DashScope)
 
+### 2. 小模型友好优化 — 不依赖模型能力
+
+**目标**：4B 小模型也能正确使用所有功能，代码层面保证行为正确。
+
+- [ ] **意图路由 + 工具过滤** — 根据用户消息关键词预筛选工具列表，只传相关工具给模型（如检测到"记录" → 只传 memory；检测到"提醒/定时" → 只传 schedule_task）
+- [ ] **按需注入提示词** — 系统提示词按意图动态裁剪，不把所有工具说明都塞进去
+- [ ] **工具参数后处理** — 工具执行前自动修正常见格式错误（如时间格式 `2024-12-31 9:00` → ISO 8601）
+- [ ] **基于规则的摘要** — `/compact` 支持不调用 AI 的规则摘要模式（提取最近 N 轮 key messages）
+
 ### 3. 轻量 ReAct 自主循环
 - [ ] 核心增加 ReAct 循环逻辑（maxReactRounds: 3）
 - [ ] web_search 工具（简单搜索）
