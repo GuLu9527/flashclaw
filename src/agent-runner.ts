@@ -876,16 +876,22 @@ async function runAgentOnce(
         messages,
         async (name, params) => {
           resetActivityTimeout(); // 工具执行时也重置超时
+          input.onToolUse?.(name, params);
           const toolResult = await toolExecutor(name, params);
           if (toolResult.isError) {
             throw new Error(toolResult.content);
           }
           return toolResult.content;
         },
-        { system: systemPrompt, tools, maxTokens: AI_MAX_OUTPUT_TOKENS },
+        { system: finalSystemPrompt, tools, maxTokens: AI_MAX_OUTPUT_TOKENS },
         // 心跳回调：工具链内每收到流式数据或执行工具时重置超时
         () => resetActivityTimeout()
       );
+
+      // 工具调用后的最终文本通过 onToken 发送给 CLI（handleToolUse 内部的流式输出不经过 onToken）
+      if (result && input.onToken) {
+        input.onToken(result);
+      }
 
       clearActivityTimeout();
     } else {
