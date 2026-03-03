@@ -130,6 +130,91 @@ export function getAllTools(): ToolSchema[] {
   return pluginManager.getActiveTools();
 }
 
+// ==================== 意图路由 ====================
+
+/**
+ * 意图路由规则
+ * pattern: 用户消息匹配的正则（高置信度关键词）
+ * tools: 匹配时保留的工具名列表
+ */
+interface IntentRoute {
+  pattern: RegExp;
+  tools: string[];
+  label: string;
+}
+
+// 通用工具：任何意图都可能需要的工具
+const ALWAYS_INCLUDE_TOOLS = ['send_message'];
+
+const INTENT_ROUTES: IntentRoute[] = [
+  {
+    label: 'memory-remember',
+    pattern: /(?:记住|记下|remember|保存|存一下)(?!.*(?:提醒|闹钟|定时|每天|每周|每月|cron))/i,
+    tools: ['memory', 'memory_search'],
+  },
+  {
+    label: 'memory-log',
+    pattern: /(?:记录|日志|笔记|log|note)(?!.*(?:提醒|闹钟|定时|每天|每周|每月|cron))/i,
+    tools: ['memory', 'memory_search'],
+  },
+  {
+    label: 'memory-recall',
+    pattern: /(?:我是谁|我叫什么|我喜欢|你还记得|回忆|recall|之前说过)/i,
+    tools: ['memory', 'memory_search'],
+  },
+  {
+    label: 'schedule',
+    pattern: /(?:提醒|闹钟|定时|每天|每周|每月|每隔|cron|schedule|remind|timer|(\d+)\s*(?:秒|分钟|小时|天)后)/i,
+    tools: ['schedule_task', 'list_tasks', 'cancel_task', 'pause_task', 'resume_task'],
+  },
+  {
+    label: 'tasks',
+    pattern: /(?:任务|tasks|有哪些任务|任务列表|查看任务)/i,
+    tools: ['list_tasks', 'cancel_task', 'pause_task', 'resume_task', 'schedule_task'],
+  },
+  {
+    label: 'web',
+    pattern: /(?:抓取|网页|网站|链接|fetch|http|www\.|\.com|\.cn|\.org|浏览器|截图|打开.*网)/i,
+    tools: ['web_fetch', 'browser_launch', 'browser_snapshot', 'browser_action', 'browser_tabs', 'browser_storage'],
+  },
+  {
+    label: 'group',
+    pattern: /(?:注册群|添加群|register.*group|群组管理)/i,
+    tools: ['register_group'],
+  },
+];
+
+/**
+ * 根据用户消息意图过滤工具列表
+ * 高置信度匹配时只返回相关工具 + 通用工具
+ * 无匹配时返回全部工具（零误判回退）
+ */
+function filterToolsByIntent(prompt: string, allTools: ToolSchema[]): ToolSchema[] {
+  // 定时任务执行时不做过滤（任务内容可能需要任何工具）
+  if (!prompt || prompt.length > 500) {
+    return allTools;
+  }
+
+  // 匹配意图
+  for (const route of INTENT_ROUTES) {
+    if (route.pattern.test(prompt)) {
+      const allowedNames = new Set([...route.tools, ...ALWAYS_INCLUDE_TOOLS]);
+      const filtered = allTools.filter(t => allowedNames.has(t.name));
+      
+      // 如果过滤后没有匹配的工具（工具未安装），回退到全部
+      if (filtered.length <= ALWAYS_INCLUDE_TOOLS.length) {
+        return allTools;
+      }
+      
+      logger.debug({ intent: route.label, filtered: filtered.length, total: allTools.length }, '🎯 意图路由命中');
+      return filtered;
+    }
+  }
+
+  // 无匹配：返回全部工具
+  return allTools;
+}
+
 
 /**
  * 创建工具执行器
@@ -566,14 +651,21 @@ async function runAgentOnce(
   const systemPrompt = getGroupSystemPrompt(group, input.isMain, input.isScheduledTask);
 
   // 获取工具定义（插件工具 + 内置后备工具）
-  const tools = getAllTools();
+  const allTools = getAllTools();
   
-  // 调试：打印可用工具
-  logger.info({ 
+  // ==================== 意图路由 + 工具过滤 ====================
+  // 根据用户消息关键词预筛选工具，减少小模型的选择负担
+  // 只在高置信度时过滤，无匹配时传全部工具（零误判回退）
+  const tools = process.env.TOOL_ROUTING === 'off'
+    ? allTools
+    : filterToolsByIntent(input.prompt, allTools);
+  
+  logger.debug({ 
     group: group.folder, 
-    toolCount: tools.length,
+    allTools: allTools.length,
+    filtered: tools.length,
     toolNames: tools.map(t => t.name)
-  }, '⚡ 可用工具列表');
+  }, '⚡ 工具列表');
 
   // ==================== 上下文窗口保护 ====================
   const modelContextWindow = getModelContextWindow(currentModel);
