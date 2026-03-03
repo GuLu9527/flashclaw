@@ -33,7 +33,6 @@ flashclaw plugins install web-fetch
 | followRedirects | boolean | ❌ | 是否跟随重定向（默认 true） |
 | maxRedirects | number | ❌ | 最大重定向次数（默认 3） |
 | userAgent | string | ❌ | 自定义 UA |
-| allowPrivate | boolean | ❌ | 允许访问内网（默认 false） |
 
 ## 示例
 
@@ -55,4 +54,4 @@ flashclaw plugins install web-fetch
 ## 注意事项
 
 - 默认禁止访问内网地址和 localhost
-- 需要访问内网时可设置 `allowPrivate=true` 或环境变量 `WEB_FETCH_ALLOW_PRIVATE=1`
+- 需要访问内网时可设置环境变量 `WEB_FETCH_ALLOW_PRIVATE=1`（默认禁止）

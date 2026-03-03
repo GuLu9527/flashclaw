@@ -83,6 +83,7 @@ flashclaw/
 |------|------|----------|
 | `channel` | 消息渠道插件 | init → start → onMessage → stop |
 | `tool` | AI 工具插件 | 按需调用 execute |
+| `provider` | AI Provider 插件 | 初始化后提供 chat/chatStream/handleToolUse |
 
 ---
 

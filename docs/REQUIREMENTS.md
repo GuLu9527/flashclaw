@@ -102,6 +102,7 @@ FlashClaw 采用乐高式插件架构：
 |----------|------|------|
 | `channel` | 消息渠道 | 飞书 |
 | `tool` | AI 工具 | 发消息、定时任务 |
+| `provider` | AI Provider | anthropic-provider、openai-provider |
 
 **插件加载流程：**
 1. 扫描 `plugins/` 目录

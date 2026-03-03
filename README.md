@@ -266,7 +266,7 @@ FlashClaw 支持通过 `SOUL.md` 文件自定义 AI 的人格和语调：
 ```bash
 CONTEXT_WINDOW_SIZE=200000     # 覆盖内置模型上下文窗口大小
 CONTEXT_MIN_TOKENS=16000       # 剩余 token 低于此值拒绝运行
-CONTEXT_WARN_TOKENS=32000      # 剩余 token 低于此值自动压缩
+CONTEXT_WARN_TOKENS=16000      # 剩余 token 低于此值自动压缩
 ```
 
 ### 智能响应
@@ -282,7 +282,7 @@ CONTEXT_WARN_TOKENS=32000      # 剩余 token 低于此值自动压缩
 | 命令 | 说明 |
 |------|------|
 | `/help` | 显示帮助信息 |
-| `/status` | 查看会话状态和 Token 用量 |
+| `/status` | 查看会话状态、Token 用量、模型、耗时和 TPS |
 | `/new` | 重置当前会话 |
 | `/compact` | 压缩上下文（生成摘要） |
 | `/tasks` | 查看定时任务 |

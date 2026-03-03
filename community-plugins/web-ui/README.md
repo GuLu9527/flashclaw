@@ -84,7 +84,7 @@ Web UI 提供以下 REST API：
 
 ### 状态
 
-- `GET /api/status` - 获取服务状态
+- `GET /api/status` - 获取服务状态（含 running/pid/uptime/messageCount/activeSessions/activeTaskCount/totalTaskCount/provider/model）
 
 ### 任务
 

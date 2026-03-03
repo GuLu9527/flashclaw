@@ -243,6 +243,7 @@ FlashClaw 采用乐高式插件架构，所有渠道和工具都是插件。
 |------|------|----------|
 | `channel` | 消息渠道 | init → start → onMessage → stop |
 | `tool` | AI 工具 | 按需调用 execute |
+| `provider` | AI Provider | 初始化后提供 chat/chatStream/handleToolUse |
 
 ### 插件加载流程
 

@@ -23,7 +23,7 @@ FlashClaw 使用乐高式插件架构，所有扩展通过插件实现。
 ```typescript
 // src/plugins/types.ts
 
-type PluginType = 'channel' | 'tool';
+type PluginType = 'channel' | 'tool' | 'provider';
 
 interface PluginManifest {
   name: string;
@@ -262,11 +262,23 @@ interface ImageAttachment {
   mimeType?: string;    // 如 'image/png'
 }
 
+interface AgentUsageMetrics {
+  inputTokens: number;
+  outputTokens: number;
+}
+
+interface AgentRunMetrics {
+  durationMs: number;
+  model: string;
+  usage?: AgentUsageMetrics;
+}
+
 interface AgentOutput {
   status: 'success' | 'error';
   result: string | null;
   newSessionId?: string;
   error?: string;
+  metrics?: AgentRunMetrics;
 }
 
 interface RetryConfig {

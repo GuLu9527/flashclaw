@@ -4,6 +4,17 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，
 并遵循 [语义化版本](https://semver.org/spec/v2.0.0.html)。
 
+## [Unreleased]
+
+### 改进
+- CLI `/status` 与对话输出新增运行时指标：模型、耗时、真实输入/输出 Token、TPS（优先使用 provider 返回的 usage）
+- Web UI 状态接口 `/api/status` 新增 `provider` 与 `model` 字段，便于前端和 CLI 展示当前模型信息
+- OpenAI/Ollama 兼容流式路径补充 usage 采集与透传，支持基于真实 token 的 TPS 统计
+
+### 修复
+- 上下文窗口保护默认警告阈值调整：`CONTEXT_WARN_TOKENS` 默认值由 `32000` 下调为 `16000`，避免过早触发压缩
+- 统一关键日志中的群组标识为 `group.folder`，修复 CLI 场景下群组显示不一致问题
+
 ## [1.7.0] - 2026-03-01
 
 ### 新增
