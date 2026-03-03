@@ -7,9 +7,16 @@
 ## [Unreleased]
 
 ### 新增
+- **核心 API 层** (`src/core-api.ts`) — 所有渠道（CLI、飞书、Telegram、Web UI）的统一入口，提供 `chat()`、`getStatus()`、`compactSession()` 等接口
+- **CLI 渠道独立 HTTP 服务** — `cli-channel` 从空壳改为真正的渠道插件（端口 3001），通过核心 API 层处理消息，不再依赖 web-ui
+- **CLI Ink 终端 UI** (`src/cli-ink.tsx`) — 使用 React + Ink 重写终端界面，像素风吉祥物、流式输出、上下文用量进度条
 - **压缩前记忆 Flush** — 压缩对话上下文前自动让 AI 提取重要信息（用户偏好、关键事实）写入长期记忆，避免压缩时丢失重要信息（参考 OpenClaw memoryFlush）
 - **每日日志** — memory 插件新增 `log` action，支持追加式每日日志（`data/memory/daily/YYYY-MM-DD.md`），启动时自动加载今天和昨天的日志到系统提示词
-- **语义记忆搜索** — 新增 `memory-vector` 内置插件，基于 Ollama embedding 的模糊召回，支持自然语言搜索长期记忆和每日日志
+- **语义记忆搜索** — 新增 `memory-vector` 社区插件，基于 Ollama embedding 的模糊召回，支持自然语言搜索长期记忆和每日日志
+
+### 改进
+- **渠道架构解耦** — 渠道插件统一通过核心 API 层通信，不互相依赖（Phase 1-2 完成）
+- **小模型友好** — 新增核心设计原则，工具 schema 优化使用场景示例，帮助 4B 小模型正确选择工具
 
 ### 修复
 - **P0: 工具调用重复 API 请求** — `agent-runner.ts` 流式检测到 `tool_use` 后不再重复发送 `chat()` 请求，直接复用流式收集的完整消息对象，工具调用场景响应时间减半

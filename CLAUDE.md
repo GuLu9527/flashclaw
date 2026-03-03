@@ -163,11 +163,17 @@ npm run dev
 
 ```
 src/                    # 核心代码（尽量不动）
-├── index.ts            # 主入口
+├── index.ts            # 主入口、消息路由
+├── core-api.ts         # 核心 API 层（所有渠道的统一入口）
+├── cli.ts              # CLI 命令行工具
+├── cli-ink.tsx         # CLI 终端 UI（React + Ink）
 ├── commands.ts         # 聊天命令处理
 ├── commands/           # CLI 子命令
 │   ├── init.ts         # 交互式初始化向导
-│   └── doctor.ts       # 环境诊断
+│   ├── doctor.ts       # 环境诊断
+│   ├── security.ts     # 安全审计
+│   └── daemon.ts       # 后台服务管理
+├── channel-manager.ts  # 渠道管理器
 ├── session-tracker.ts  # Token 追踪
 ├── message-queue.ts    # 消息队列
 ├── health.ts           # 健康检查
@@ -180,32 +186,38 @@ src/                    # 核心代码（尽量不动）
 │   └── index.ts        # 插件入口
 ├── core/               # 核心模块（尽量不动）
 │   ├── api-client.ts   # 向后兼容的 AI 客户端（已迁移到插件）
-│   ├── memory.ts       # 记忆管理 (短期+长期+压缩)
+│   ├── memory.ts       # 记忆管理 (短期+长期+压缩+每日日志)
 │   ├── context-guard.ts # 上下文窗口保护
 │   └── model-capabilities.ts # 模型能力检测
 ├── utils/              # 工具模块
+│   ├── network.ts      # 网络工具（IP 检测、URL 提取）
+│   ├── env-substitute.ts # 环境变量替换
 │   ├── log-rotate.ts
 │   ├── rate-limiter.ts
 │   └── retry.ts
 └── ...
 
-plugins/                # 内置插件目录
-├── schedule-task/       # 定时任务工具
+plugins/                # 内置插件（10个）
+├── anthropic-provider/ # Anthropic AI Provider（默认）
+├── cli-channel/        # CLI 渠道（独立 HTTP 服务，端口 3001）
+├── schedule-task/      # 定时任务工具
 ├── list-tasks/         # 查看任务列表
 ├── cancel-task/        # 取消任务
 ├── pause-task/         # 暂停任务
 ├── resume-task/        # 恢复任务
-├── memory/             # 记忆工具
+├── memory/             # 记忆工具（remember/recall/log）
 ├── send-message/       # 发送消息工具
 └── register-group/     # 注册群组
 
 community-plugins/      # 社区/官方扩展插件
 ├── feishu/             # 飞书渠道
+├── telegram/           # Telegram 渠道
+├── openai-provider/    # OpenAI/Ollama Provider
+├── memory-vector/      # 语义记忆搜索（Ollama embedding）
 ├── hello-world/        # 测试插件
 ├── web-fetch/          # 网页抓取插件
 ├── browser-control/    # 浏览器自动化控制 (Playwright)
-├── web-ui/             # Web 管理界面
-└── telegram/           # Telegram 渠道
+└── web-ui/             # Web 管理界面
 ```
 
 ### 命名约定

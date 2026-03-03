@@ -34,13 +34,14 @@
 
 **执行计划：**
 
-**Phase 1：抽取核心 API 层（最关键）**
-- [ ] 新增 `src/core-api.ts` — 统一接口：`processMessage()` / `executeCommand()` / `chat()` / `getStatus()` / `compactSession()` 等
-- [ ] 修改 `src/index.ts` — `handleIncomingMessage` 改为调用 core-api，暴露 `global.__flashclaw_core_api`
+**Phase 1：抽取核心 API 层（已完成）**
+- [x] 新增 `src/core-api.ts` — 统一接口：`chat()` / `getStatus()` / `getHistory()` / `clearSession()` / `compactSession()` 等
+- [x] 修改 `src/index.ts` — 启动时初始化 core-api，注入依赖，暴露 `global.__flashclaw_core_api`
 
-**Phase 2：改造 CLI（解决当前耦合痛点）**
-- [ ] 改造 `plugins/cli-channel/index.ts` — 从空壳改为真正的渠道插件，启动 HTTP/WS 服务供 CLI 连接，直接调用 core-api
-- [ ] 修改 `src/cli.ts` — CLI 客户端连接 cli-channel（而非 web-ui），`/compact` 等命令走 cli-channel 路由
+**Phase 2：改造 CLI（已完成）**
+- [x] 改造 `plugins/cli-channel/index.ts` — 从空壳改为真正的 HTTP 渠道插件（端口 3001），通过 core-api 处理消息
+- [x] 修改 `src/cli.ts` — CLI 客户端默认连接 cli-channel（端口 3001），不再依赖 web-ui
+- [x] 新增 `src/cli-ink.tsx` — 使用 React + Ink 重写终端 UI
 
 **Phase 3：改造 web-ui（消除 global 依赖）**
 - [ ] 修改 `web-ui/server/services/chat.ts` — 从直接读 `global.__flashclaw_run_agent` 改为调用 core-api
