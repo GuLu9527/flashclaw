@@ -245,27 +245,34 @@ const openaiProvider: AIProviderPlugin = {
               function: { name: '', arguments: '' },
             };
           }
-          // 拼装 name 和 arguments
+          // 拼装 name 和 arguments（流式 delta 逐步累积）
           if (tc.function?.name) {
             collectedToolCalls[idx].function.name += tc.function.name;
           }
           if (tc.function?.arguments) {
             collectedToolCalls[idx].function.arguments += tc.function.arguments;
           }
-          // 发出 tool_use 事件（仅在有 name 时，避免重复）
-          if (tc.function?.name) {
-            yield {
-              type: 'tool_use',
-              id: collectedToolCalls[idx].id,
-              name: tc.function.name,
-              input: tc.function?.arguments || '',
-            };
-          }
+          // 注意：不在 delta 中 yield tool_use，因为 arguments 还不完整
+          // 完整的 tool_use 事件在流结束后统一发送（见下方 done 事件处理）
         }
       }
 
       if (choice?.finish_reason) {
         finishReason = choice.finish_reason;
+      }
+    }
+
+    // 流结束后，发送完整的 tool_use 事件（arguments 已完整拼装）
+    for (const tc of collectedToolCalls) {
+      if (tc.function.name) {
+        let parsedInput: unknown;
+        try { parsedInput = JSON.parse(tc.function.arguments || '{}'); } catch { parsedInput = {}; }
+        yield {
+          type: 'tool_use',
+          id: tc.id,
+          name: tc.function.name,
+          input: parsedInput,
+        };
       }
     }
 

@@ -159,8 +159,8 @@ const INTENT_ROUTES: IntentRoute[] = [
   },
   {
     label: 'memory-recall',
-    pattern: /(?:我是谁|我叫什么|我喜欢|你还记得|回忆|recall|之前说过)/i,
-    tools: ['memory', 'memory_search'],
+    pattern: /(?:我是谁|我叫什么|我喜欢|你还记得|回忆|recall|之前说过|知道我|认识我)/i,
+    tools: ['memory_search'],
   },
   {
     label: 'schedule',
@@ -184,15 +184,20 @@ const INTENT_ROUTES: IntentRoute[] = [
   },
 ];
 
+interface IntentRouteResult {
+  tools: ToolSchema[];
+  intent: string | null;
+}
+
 /**
  * 根据用户消息意图过滤工具列表
  * 高置信度匹配时只返回相关工具 + 通用工具
  * 无匹配时返回全部工具（零误判回退）
  */
-function filterToolsByIntent(prompt: string, allTools: ToolSchema[]): ToolSchema[] {
+function filterToolsByIntent(prompt: string, allTools: ToolSchema[]): IntentRouteResult {
   // 定时任务执行时不做过滤（任务内容可能需要任何工具）
   if (!prompt || prompt.length > 500) {
-    return allTools;
+    return { tools: allTools, intent: null };
   }
 
   // 匹配意图
@@ -203,16 +208,16 @@ function filterToolsByIntent(prompt: string, allTools: ToolSchema[]): ToolSchema
       
       // 如果过滤后没有匹配的工具（工具未安装），回退到全部
       if (filtered.length <= ALWAYS_INCLUDE_TOOLS.length) {
-        return allTools;
+        return { tools: allTools, intent: null };
       }
       
       logger.debug({ intent: route.label, filtered: filtered.length, total: allTools.length }, '🎯 意图路由命中');
-      return filtered;
+      return { tools: filtered, intent: route.label };
     }
   }
 
   // 无匹配：返回全部工具
-  return allTools;
+  return { tools: allTools, intent: null };
 }
 
 
@@ -656,9 +661,47 @@ async function runAgentOnce(
   // ==================== 意图路由 + 工具过滤 ====================
   // 根据用户消息关键词预筛选工具，减少小模型的选择负担
   // 只在高置信度时过滤，无匹配时传全部工具（零误判回退）
-  const tools = process.env.TOOL_ROUTING === 'off'
-    ? allTools
-    : filterToolsByIntent(input.prompt, allTools);
+  let tools: ToolSchema[];
+  let systemPromptExtra = '';
+
+  if (process.env.TOOL_ROUTING === 'off') {
+    tools = allTools;
+  } else {
+    const routeResult = filterToolsByIntent(input.prompt, allTools);
+    tools = routeResult.tools;
+
+    // 对于 recall 类意图，代码层面直接调用 memory_search，注入结果到提示词
+    // 不依赖小模型主动调用工具
+    if (routeResult.intent === 'memory-recall') {
+      const searchTool = pluginManager.getTool('memory_search');
+      if (searchTool) {
+        try {
+          const searchResult = await searchTool.plugin.execute(
+            { query: input.prompt, maxResults: 5 },
+            {
+              chatId: input.chatJid,
+              groupId: group.folder,
+              userId: input.userId || input.chatJid,
+              sendMessage: async () => {},
+              sendImage: async () => {},
+            }
+          );
+          if (searchResult.success && searchResult.data) {
+            const data = searchResult.data as { results?: Array<{ content: string; source: string }> };
+            if (data.results && data.results.length > 0) {
+              const memoryContext = data.results.map(r => `- ${r.content}`).join('\n');
+              systemPromptExtra = `\n\n## 相关记忆（自动检索）\n以下是与用户问题相关的记忆，请基于这些信息回答：\n${memoryContext}`;
+              // recall 意图已预处理，不需要传工具给模型
+              tools = allTools.filter(t => t.name === 'send_message');
+              logger.debug({ results: data.results.length }, '🎯 recall 意图：已自动检索记忆');
+            }
+          }
+        } catch (err) {
+          logger.debug({ err }, '🎯 recall 意图：自动检索失败，回退到模型决策');
+        }
+      }
+    }
+  }
   
   logger.debug({ 
     group: group.folder, 
@@ -757,8 +800,10 @@ async function runAgentOnce(
 
     logger.info({ group: group.folder }, '⚡ 开始流式请求');
 
+    const finalSystemPrompt = systemPromptExtra ? systemPrompt + systemPromptExtra : systemPrompt;
+
     for await (const event of apiProvider.chatStream(messages, {
-      system: systemPrompt,
+      system: finalSystemPrompt,
       tools,
       maxTokens: AI_MAX_OUTPUT_TOKENS
     })) {
@@ -774,7 +819,14 @@ async function runAgentOnce(
         input.onToken?.(event.text);
       } else if (event.type === 'tool_use') {
         // 通知工具调用（用于 CLI/Web UI 显示）
-        input.onToolUse?.(event.name, event.input);
+        // 确保 input 是 parsed object（OpenAI provider 流式可能发送 raw string）
+        let parsedInput = event.input;
+        if (typeof parsedInput === 'string') {
+          try { parsedInput = JSON.parse(parsedInput); } catch { /* keep as string */ }
+        }
+        if (event.name) {
+          input.onToolUse?.(event.name, parsedInput);
+        }
       } else if (event.type === 'done') {
         // 保存完整消息对象（包含 tool_use blocks），用于后续 handleToolUse
         streamedMessage = event.message;
