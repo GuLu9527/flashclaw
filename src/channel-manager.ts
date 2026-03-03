@@ -26,7 +26,7 @@ export class ChannelManager {
     for (const channel of this.channels) {
       channel.onMessage(onMessage);
       await channel.start();
-      logger.info({ channel: channel.name }, '⚡ 渠道已启动');
+      logger.debug({ channel: channel.name }, '⚡ 渠道已启动');
     }
   }
   

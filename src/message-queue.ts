@@ -63,7 +63,7 @@ export class MessageQueue<T> {
     }, 60000); // 每分钟清理一次
     this.processInterval.unref();
     
-    logger.info('Message queue started');
+    logger.debug('Message queue started');
   }
 
   /**

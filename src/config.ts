@@ -10,7 +10,7 @@ import dotenv from 'dotenv';
 import { paths } from './paths.js';
 
 // Load environment variables from .env file
-dotenv.config();
+dotenv.config({ quiet: true });
 
 // ==================== Bot Configuration ====================
 // Bot name for display in messages (customizable via .env)

@@ -11,8 +11,8 @@ import { homedir } from 'os';
 // 加载环境变量：先加载用户目录 ~/.flashclaw/.env，再加载项目根目录 .env
 // 后加载的不会覆盖已有值，所以用户目录配置优先
 const flashclawHome = process.env.FLASHCLAW_HOME || path.join(homedir(), '.flashclaw');
-dotenv.config({ path: path.join(flashclawHome, '.env') });
-dotenv.config(); // 项目根目录 .env
+dotenv.config({ path: path.join(flashclawHome, '.env'), quiet: true });
+dotenv.config({ quiet: true }); // 项目根目录 .env
 import pino from 'pino';
 import { z } from 'zod';
 
@@ -126,10 +126,10 @@ function loadState(): void {
   if (!hasMainGroup) {
     // 用占位符 ID 注册 main 模板，实际会话会在收到消息时动态注册
     registeredGroups['__main_template__'] = DEFAULT_MAIN_GROUP;
-    logger.info('⚡ 已初始化 main 群组模板');
+    logger.debug('⚡ 已初始化 main 群组模板');
   }
   
-  logger.info({ groupCount: Object.keys(registeredGroups).length }, '⚡ 状态已加载');
+  logger.debug({ groupCount: Object.keys(registeredGroups).length }, '⚡ 状态已加载');
 }
 
 function saveState(): void {
@@ -928,7 +928,7 @@ function startIpcWatcher(): void {
   };
 
   processIpcFiles();
-  logger.info('⚡ IPC 监听已启动');
+  logger.debug('⚡ IPC 监听已启动');
 }
 
 // ==================== IPC Schema 验证 ====================
@@ -1119,8 +1119,13 @@ async function processTaskIpc(
 }
 
 // ==================== 启动横幅 ====================
-function displayBanner(enabledPlatforms: string[], groupCount: number): void {
+function displayBanner(enabledPlatforms: string[], skippedPlugins: number): void {
   const platformsDisplay = enabledPlatforms.map(p => channelManager.getPlatformDisplayName(p)).join(' | ');
+  const stats = pluginManager.getStats();
+  const provider = pluginManager.getProvider();
+  const modelDisplay = provider ? `${provider.name} / ${getCurrentModelId()}` : 'none';
+  const cliPort = process.env.CLI_PORT || '3001';
+  const skippedLabel = skippedPlugins > 0 ? `\x1b[90m，跳过 ${skippedPlugins}\x1b[0m` : '';
   
   const banner = `
 \x1b[33m
@@ -1133,16 +1138,11 @@ function displayBanner(enabledPlatforms: string[], groupCount: number): void {
 \x1b[0m
 \x1b[36m  ⚡ 闪电龙虾 - 快如闪电的 AI 助手\x1b[0m
 
-  ┌─────────────────────────────────────────────────────────────────────────┐
-  │                                                                         │
-  │  \x1b[32m✓\x1b[0m 状态: \x1b[32m运行中\x1b[0m                                                        │
-  │  \x1b[32m✓\x1b[0m 模式: \x1b[33mDirect (Claude API)\x1b[0m                                           │
-  │  \x1b[32m✓\x1b[0m 平台: \x1b[36m${platformsDisplay.padEnd(55)}\x1b[0m│
-  │  \x1b[32m✓\x1b[0m 群组: \x1b[33m${String(groupCount).padEnd(55)}\x1b[0m│
-  │                                                                         │
-  │  \x1b[90m所有平台使用 WebSocket 长连接，无需公网服务器\x1b[0m                        │
-  │                                                                         │
-  └─────────────────────────────────────────────────────────────────────────┘
+  \x1b[32m✓\x1b[0m 模型: \x1b[33m${modelDisplay}\x1b[0m
+  \x1b[32m✓\x1b[0m 插件: \x1b[36m${stats.total} 个已加载\x1b[0m\x1b[90m（工具 ${stats.tools} | 渠道 ${stats.channels} | Provider ${stats.providers}）\x1b[0m${skippedLabel}
+  \x1b[32m✓\x1b[0m 平台: \x1b[36m${platformsDisplay}\x1b[0m
+  \x1b[32m✓\x1b[0m CLI:  \x1b[36mhttp://127.0.0.1:${cliPort}\x1b[0m\x1b[90m  ← flashclaw cli\x1b[0m
+  \x1b[32m✓\x1b[0m Web:  \x1b[36mhttp://127.0.0.1:${process.env.WEBUI_PORT || '3000'}\x1b[0m\x1b[90m  ← Web UI\x1b[0m
 
   \x1b[90m按 Ctrl+C 停止服务\x1b[0m
 `;
@@ -1155,27 +1155,34 @@ export async function main(): Promise<void> {
   // 确保所有必要目录存在
   ensureDirectories();
 
-  // 启动时配置校验：检查 API Key 是否已配置
-  const hasApiKey = !!(process.env.ANTHROPIC_AUTH_TOKEN || process.env.ANTHROPIC_API_KEY);
+  // 启动时配置校验：根据 AI_PROVIDER 检查对应的 API Key
+  const aiProvider = process.env.AI_PROVIDER || 'anthropic-provider';
+  const hasAnthropicKey = !!(process.env.ANTHROPIC_AUTH_TOKEN || process.env.ANTHROPIC_API_KEY);
+  const hasOpenAIKey = !!(process.env.OPENAI_API_KEY);
+  const hasApiKey = aiProvider === 'openai-provider' ? hasOpenAIKey : hasAnthropicKey;
+  
   if (!hasApiKey) {
     const envPath = paths.env();
-    const { existsSync } = await import('fs');
-    const envExists = existsSync(envPath);
+    const envExists = fs.existsSync(envPath);
+    const isOpenAI = aiProvider === 'openai-provider';
+
+    const keyName = isOpenAI ? 'OPENAI_API_KEY' : 'ANTHROPIC_AUTH_TOKEN';
+    const keyExample = isOpenAI ? 'sk-xxx 或 ollama（本地模型）' : 'sk-ant-xxx';
 
     console.log(`
 \x1b[33m⚠  API Key 未配置\x1b[0m
 
-FlashClaw 需要 Anthropic API Key 才能与 AI 通信。
+当前 Provider: \x1b[36m${aiProvider}\x1b[0m
 
 ${envExists 
-  ? `请编辑配置文件添加 API Key:\n  \x1b[36m${envPath}\x1b[0m\n\n  设置 ANTHROPIC_AUTH_TOKEN=sk-xxx`
+  ? `请编辑配置文件添加 API Key:\n  \x1b[36m${envPath}\x1b[0m\n\n  设置 ${keyName}=${keyExample}`
   : `请先运行初始化向导:\n  \x1b[36mflashclaw init\x1b[0m`
 }
 
 或通过环境变量设置:
-  \x1b[36mexport ANTHROPIC_AUTH_TOKEN=sk-xxx\x1b[0m
+  \x1b[36mexport ${keyName}=${keyExample}\x1b[0m
 `);
-    logger.warn('API Key 未配置，AI 功能将不可用。机器人可以启动但无法回复消息。');
+    logger.warn({ provider: aiProvider }, 'API Key 未配置，AI 功能将不可用。');
   }
   
   // 初始化记忆管理器（使用全局单例）
@@ -1183,29 +1190,37 @@ ${envExists
   
   // 初始化数据库（必须在加载插件之前，因为插件可能依赖数据库）
   initDatabase();
-  logger.info('⚡ 数据库已初始化');
+  logger.debug('⚡ 数据库已初始化');
   
   // 加载插件（在数据库初始化之后）
-  // 先加载内置插件
+  let totalPluginDirs = 0;
+  let loadedPluginCount = 0;
+
   const builtinPluginsDir = getBuiltinPluginsDir();
   if (fs.existsSync(builtinPluginsDir)) {
-    logger.info({ dir: builtinPluginsDir }, '⚡ 加载内置插件');
-    await loadFromDir(builtinPluginsDir);
+    const dirs = fs.readdirSync(builtinPluginsDir).filter(f => fs.statSync(path.join(builtinPluginsDir, f)).isDirectory());
+    totalPluginDirs += dirs.length;
+    const loaded = await loadFromDir(builtinPluginsDir);
+    loadedPluginCount += loaded.length;
   }
 
-  // 再加载社区插件（可选，可覆盖内置插件）
   const communityPluginsDir = getCommunityPluginsDir();
   if (fs.existsSync(communityPluginsDir)) {
-    logger.info({ dir: communityPluginsDir }, '⚡ 加载社区插件');
-    await loadFromDir(communityPluginsDir);
+    const dirs = fs.readdirSync(communityPluginsDir).filter(f => fs.statSync(path.join(communityPluginsDir, f)).isDirectory());
+    totalPluginDirs += dirs.length;
+    const loaded = await loadFromDir(communityPluginsDir);
+    loadedPluginCount += loaded.length;
   }
 
-  // 最后加载用户插件（可覆盖内置和社区插件）
   const userPluginsDir = paths.userPlugins();
   if (fs.existsSync(userPluginsDir)) {
-    logger.info({ dir: userPluginsDir }, '⚡ 加载用户插件');
-    await loadFromDir(userPluginsDir);
+    const dirs = fs.readdirSync(userPluginsDir).filter(f => fs.statSync(path.join(userPluginsDir, f)).isDirectory());
+    totalPluginDirs += dirs.length;
+    const loaded = await loadFromDir(userPluginsDir);
+    loadedPluginCount += loaded.length;
   }
+
+  const skippedPlugins = totalPluginDirs - loadedPluginCount;
   
   // 启用热重载 - 只监听用户插件目录
   if (fs.existsSync(userPluginsDir)) {
@@ -1225,7 +1240,7 @@ ${envExists
     if (targetProvider) {
       pluginManager.setProvider(targetProvider);
       apiProvider = targetProvider;
-      logger.info({ configured: configuredProvider }, '⚡ 使用配置的 AI Provider');
+      logger.debug({ configured: configuredProvider }, '⚡ 使用配置的 AI Provider');
     } else {
       // 配置的 provider 不存在，使用第一个可用的
       apiProvider = pluginManager.getProvider();
@@ -1268,7 +1283,7 @@ ${envExists
 
   // 暴露 provider 给外部模块（用于 model-capabilities 等）
   global.__flashclaw_api_provider = apiProvider;
-  logger.info({ provider: apiProvider.name, model: apiProvider.getModel() }, '⚡ AI Provider 已初始化');
+  logger.debug({ provider: apiProvider.name, model: apiProvider.getModel() }, '⚡ AI Provider 已初始化');
 
   // 初始化渠道管理器
   channelManager = new ChannelManager();
@@ -1298,7 +1313,7 @@ ${envExists
   }
 
   const enabledPlatforms = channelManager.getEnabledPlatforms();
-  logger.info({ platforms: enabledPlatforms }, '⚡ 渠道管理器已初始化');
+  logger.debug({ platforms: enabledPlatforms }, '⚡ 渠道管理器已初始化');
 
   // 加载状态
   loadState();
@@ -1332,7 +1347,7 @@ ${envExists
     maxRetries: MESSAGE_QUEUE_MAX_RETRIES
   });
   messageQueue.start();
-  logger.info('⚡ 消息队列已初始化');
+  logger.debug('⚡ 消息队列已初始化');
 
   // 启动任务调度器
   startSchedulerLoop({
@@ -1348,13 +1363,12 @@ ${envExists
   await channelManager.start(handleIncomingMessage);
 
   // 显示启动横幅
-  const groupCount = Object.keys(registeredGroups).length;
-  displayBanner(enabledPlatforms, groupCount);
+  displayBanner(enabledPlatforms, skippedPlugins);
 
   logger.info({ 
     mode: 'direct',
-    platforms: enabledPlatforms,
-    groups: groupCount
+    plugins: pluginManager.getStats().total,
+    skipped: skippedPlugins,
   }, '⚡ FlashClaw 已启动');
 
   // 启动健康检查服务（可通过 HEALTH_PORT 环境变量配置端口，默认 9090）

@@ -39,7 +39,7 @@ const plugin: ToolPlugin = {
   ],
 
   async init() {
-    console.log('[hello-world] 插件已加载');
+    // 插件加载日志（仅 debug 模式可见）
   },
 
   async execute(toolName: string, params: unknown, context: ToolContext): Promise<ToolResult> {

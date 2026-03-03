@@ -212,7 +212,7 @@ const plugin: ChannelPlugin = {
     });
 
     server.listen(cliPort, () => {
-      logger.info({ port: cliPort }, '⚡ CLI 渠道 API 已启动');
+      logger.debug({ port: cliPort }, '⚡ CLI 渠道 API 已启动');
     });
   },
 

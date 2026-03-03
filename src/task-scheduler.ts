@@ -386,7 +386,7 @@ function calculateNextRun(task: ScheduledTask): string | null {
  */
 export function startScheduler(deps: SchedulerDependencies): void {
   getState().deps = deps;
-  logger.info('⚡ 任务调度器已启动');
+  logger.debug('⚡ 任务调度器已启动');
   armTimer();
 }
 

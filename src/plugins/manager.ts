@@ -56,7 +56,7 @@ export class PluginManager {
       // 如果没有设置过 provider，自动设置为这个
       if (!this.currentProvider) {
         this.currentProvider = plugin;
-        logger.info({ plugin: name, version: plugin.version }, '⚡ 已设置为当前 AI Provider');
+        logger.debug({ plugin: name, version: plugin.version }, '⚡ 已设置为当前 AI Provider');
       }
     } else if (isToolPlugin(plugin)) {
       type = 'tool';
@@ -71,7 +71,7 @@ export class PluginManager {
       loadedAt: new Date(),
     });
 
-    logger.info({ plugin: name, type, version: plugin.version }, '⚡ 已注册插件');
+    logger.debug({ plugin: name, type, version: plugin.version }, '⚡ 已注册插件');
     return true;
   }
 
@@ -265,7 +265,7 @@ export class PluginManager {
    */
   setProvider(provider: AIProviderPlugin): void {
     this.currentProvider = provider;
-    logger.info({ plugin: provider.name }, '⚡ 已设置当前 AI Provider');
+    logger.debug({ plugin: provider.name }, '⚡ 已设置当前 AI Provider');
   }
 
   /**

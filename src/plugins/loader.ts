@@ -207,7 +207,7 @@ export async function loadFromDir(pluginsDir: string): Promise<string[]> {
     }
   }
 
-  logger.info({ dir, count: loaded.length }, '⚡ 插件加载完成');
+  logger.debug({ dir, count: loaded.length }, '⚡ 插件加载完成');
   return loaded;
 }
 
@@ -336,7 +336,7 @@ export async function loadPlugin(pluginPath: string): Promise<string | null> {
       await plugin.init(config);
     }
   } catch (err) {
-    logger.error({ plugin: manifest.name, err }, '插件初始化失败');
+    logger.debug({ plugin: manifest.name, err: (err as Error)?.message || err }, '插件跳过（初始化失败）');
     return null;
   }
 
@@ -408,7 +408,7 @@ export function watchPlugins(
   // 停止之前的监听
   stopWatching();
 
-  logger.info({ dir: absDir }, '⚡ 开始监听插件目录');
+  logger.debug({ dir: absDir }, '⚡ 开始监听插件目录');
 
   // 防抖定时器
   const debounceTimers = new Map<string, NodeJS.Timeout>();
@@ -514,7 +514,7 @@ function buildConfig(manifest: PluginManifest): PluginConfig {
     } else if (schema.default !== undefined) {
       config[key] = schema.default;
     } else if (schema.required) {
-      logger.warn({ plugin: manifest.name, config: key }, '缺少必需配置');
+      logger.debug({ plugin: manifest.name, config: key }, '缺少必需配置');
     }
   }
 

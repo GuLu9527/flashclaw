@@ -78,7 +78,7 @@ let deps: CoreDependencies | null = null;
  */
 export function initCoreApi(dependencies: CoreDependencies): void {
   deps = dependencies;
-  logger.info('⚡ 核心 API 层已初始化');
+  logger.debug('⚡ 核心 API 层已初始化');
 }
 
 function getDeps(): CoreDependencies {

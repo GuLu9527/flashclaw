@@ -73,7 +73,7 @@ const plugin: ToolPlugin = {
       hostname: config.host,
     }, (info) => {
       serverUrl = `http://${config.host === '0.0.0.0' ? 'localhost' : config.host}:${info.port}`;
-      console.log(`⚡ Web UI 已启动: ${serverUrl}`);
+      // 端口信息由启动横幅统一展示
       
       // 如果设置了 WEBUI_OPEN 环境变量，自动打开浏览器
       if (process.env.WEBUI_OPEN === '1' || process.env.WEBUI_OPEN === 'true') {

@@ -60,7 +60,7 @@ export function startHealthServer(port: number = 9090): http.Server {
   });
   
   server.listen(port, () => {
-    logger.info({ port }, '⚡ 健康检查服务已启动');
+    logger.debug({ port }, '⚡ 健康检查服务已启动');
   });
   
   startTime = Date.now();
