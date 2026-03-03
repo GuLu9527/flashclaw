@@ -52,6 +52,8 @@ export interface ServiceStatus {
   activeSessions: number;
   activeTaskCount: number;
   totalTaskCount: number;
+  provider: string | null;
+  model: string | null;
 }
 
 export interface RecentActivity {
@@ -134,6 +136,10 @@ export function getServiceStatus(): ServiceStatus {
     }
   }
 
+  const apiProvider = (global as any).__flashclaw_api_provider;
+  const provider = apiProvider?.name || null;
+  const model = typeof apiProvider?.getModel === 'function' ? apiProvider.getModel() : null;
+
   return {
     running,
     pid,
@@ -142,6 +148,8 @@ export function getServiceStatus(): ServiceStatus {
     activeSessions,
     activeTaskCount,
     totalTaskCount,
+    provider,
+    model,
   };
 }
 

@@ -173,7 +173,8 @@ apiRoutes.post('/plugins/:name/toggle', async (c) => {
 
 // 获取聊天历史
 apiRoutes.get('/chat/history', async (c) => {
-  const history = getChatHistory(50);
+  const group = c.req.query('group') || 'main';
+  const history = getChatHistory(group, 50);
   return c.json({ success: true, messages: history });
 });
 
@@ -182,12 +183,13 @@ apiRoutes.post('/chat', async (c) => {
   try {
     const body = await c.req.json();
     const message = body.message;
-    
+    const group = body.group || 'main';
+
     if (!message || typeof message !== 'string') {
       return c.json({ success: false, error: '消息内容不能为空' }, 400);
     }
-    
-    const response = await sendMessage(message.trim());
+
+    const response = await sendMessage(message.trim(), group);
     return c.json({ success: true, response });
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : '发送失败';
@@ -200,6 +202,7 @@ apiRoutes.post('/chat/stream', async (c) => {
   try {
     const body = await c.req.json();
     const message = body.message;
+    const group = body.group || 'main';  // 支持 CLI 传递的 group 参数
 
     if (!message || typeof message !== 'string') {
       return c.json({ success: false, error: '消息内容不能为空' }, 400);
@@ -218,7 +221,17 @@ apiRoutes.post('/chat/stream', async (c) => {
           write(`\n[TOOL:${toolInfo}]\n`);
         };
 
-        sendMessageStream(message.trim(), write, onToolUse)
+        const onMetrics = (metrics: { durationMs: number; model: string; usage?: { inputTokens: number; outputTokens: number } }) => {
+          const payload = {
+            durationMs: metrics.durationMs,
+            model: metrics.model,
+            inputTokens: metrics.usage?.inputTokens ?? null,
+            outputTokens: metrics.usage?.outputTokens ?? null,
+          };
+          write(`\n[METRICS:${JSON.stringify(payload)}]\n`);
+        };
+
+        sendMessageStream(message.trim(), group, write, onToolUse, onMetrics)
           .then(() => controller.close())
           .catch((error) => {
             const errMsg = error instanceof Error ? error.message : '发送失败';
@@ -243,7 +256,9 @@ apiRoutes.post('/chat/stream', async (c) => {
 
 // 清空聊天历史
 apiRoutes.post('/chat/clear', async (c) => {
-  const success = clearChatHistory();
+  const body = await c.req.json().catch(() => ({}));
+  const group = body.group || 'main';
+  const success = clearChatHistory(group);
   if (success) {
     return c.json({ success: true, message: '聊天记录已清空' });
   }

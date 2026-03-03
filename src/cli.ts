@@ -588,6 +588,34 @@ interface CliOptions {
   url?: string;
 }
 
+interface ChatRuntimeMetrics {
+  lastLatencyMs: number | null;
+  lastOutputChars: number;
+  lastOutputTokens: number;
+  lastInputTokens: number;
+  lastTps: number | null;
+  avgTps: number | null;
+  sampleCount: number;
+}
+
+function formatLatency(ms: number | null): string {
+  if (ms === null) return '-';
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(2)}s`;
+}
+
+function formatTps(tps: number | null): string {
+  if (tps === null || !Number.isFinite(tps) || tps <= 0) return '-';
+  return `${tps.toFixed(2)} tok/s`;
+}
+
+interface StreamMetricsPayload {
+  durationMs: number;
+  model: string;
+  inputTokens: number | null;
+  outputTokens: number | null;
+}
+
 const DEFAULT_API_URL = 'http://127.0.0.1:3000';
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000;
@@ -618,18 +646,36 @@ async function runCli(options: CliOptions): Promise<void> {
   const apiUrl = options.url || DEFAULT_API_URL;
   const group = options.group || 'main';
 
+  const runtimeMetrics: ChatRuntimeMetrics = {
+    lastLatencyMs: null,
+    lastOutputChars: 0,
+    lastOutputTokens: 0,
+    lastInputTokens: 0,
+    lastTps: null,
+    avgTps: null,
+    sampleCount: 0,
+  };
+  let currentProvider: string | null = null;
+  let currentModel: string | null = null;
+
   // 检查服务是否运行（启动时检查，不重试）
   try {
     const statusRes = await fetch(`${apiUrl}/api/status`);
     if (!statusRes.ok) {
       throw new Error('服务响应异常');
     }
-    const status = await statusRes.json() as { running?: boolean };
+    const status = await statusRes.json() as {
+      running?: boolean;
+      provider?: string | null;
+      model?: string | null;
+    };
     if (!status.running) {
       console.error(red('✗') + ' 服务未运行');
       console.log(`请先运行 ${cyan('flashclaw start')} 启动服务`);
       process.exit(1);
     }
+    currentProvider = status.provider || null;
+    currentModel = status.model || null;
   } catch (err) {
     console.error(red('✗') + ' 无法连接到服务');
     console.log(`请确认服务已启动: ${cyan('flashclaw start')}`);
@@ -637,10 +683,15 @@ async function runCli(options: CliOptions): Promise<void> {
     process.exit(1);
   }
 
+  const startupModel = currentModel
+    ? `${currentProvider || 'unknown'} / ${currentModel}`
+    : (currentProvider || '-');
+
   console.log(`\n${green('⚡ FlashClaw CLI')} - 终端对话渠道`);
   console.log(`${dim('━'.repeat(44))}`);
   console.log(`  ${dim('服务:')} ${apiUrl}`);
   console.log(`  ${dim('群组:')} ${group}`);
+  console.log(`  ${dim('模型:')} ${startupModel}`);
   console.log(`  ${dim('命令:')} /help 查看帮助\n`);
 
   const rl = readline.createInterface({
@@ -736,17 +787,28 @@ async function runCli(options: CliOptions): Promise<void> {
           activeSessions?: number;
           activeTaskCount?: number;
           totalTaskCount?: number;
+          provider?: string | null;
+          model?: string | null;
         };
+        const providerModel = status.model
+          ? `${status.provider || 'unknown'} / ${status.model}`
+          : (status.provider || '-');
         console.log(`
-┌─────────────────────────────────────┐
-│ 状态信息                              │
-├─────────────────────────────────────┤
-│ 运行时间: ${status.uptime || '-'}               │
-│ 消息总数: ${status.messageCount || 0}                      │
-│ 活跃会话: ${status.activeSessions || 0}                      │
-│ 活跃任务: ${status.activeTaskCount || 0}/${status.totalTaskCount || 0}                       │
-│ 群组: ${group}                          │
-└─────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│ 状态信息                                                     │
+├──────────────────────────────────────────────────────────────┤
+│ 运行时间: ${status.uptime || '-'}
+│ 消息总数: ${status.messageCount || 0}
+│ 活跃会话: ${status.activeSessions || 0}
+│ 活跃任务: ${status.activeTaskCount || 0}/${status.totalTaskCount || 0}
+│ 群组: ${group}
+│ 模型: ${providerModel}
+│ 上次耗时: ${formatLatency(runtimeMetrics.lastLatencyMs)}
+│ 上次输入: ${runtimeMetrics.lastInputTokens} tokens
+│ 上次输出: ${runtimeMetrics.lastOutputTokens} tokens
+│ 上次 TPS: ${formatTps(runtimeMetrics.lastTps)}
+│ 平均 TPS: ${formatTps(runtimeMetrics.avgTps)}
+└──────────────────────────────────────────────────────────────┘
 `);
       } catch (err) {
         console.error(red('❌') + ' 获取状态失败');
@@ -813,12 +875,13 @@ ${dim('可用命令:')}
         throw new Error('No response body');
       }
 
+      const requestStart = Date.now();
+
       // 流式读取响应
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let responseText = '';
-      let inToolCall = false;
-      let toolBuffer = '';
+      let streamMetrics: StreamMetricsPayload | null = null;
 
       // 清除 "正在思考" 提示
       process.stdout.write('\r' + ' '.repeat(30) + '\r');
@@ -845,14 +908,62 @@ ${dim('可用命令:')}
           }
         }
 
+        const metricsMatch = chunk.match(/\[METRICS:({.*?})\]/);
+        if (metricsMatch) {
+          try {
+            streamMetrics = JSON.parse(metricsMatch[1]) as StreamMetricsPayload;
+            if (streamMetrics?.model) {
+              currentModel = streamMetrics.model;
+            }
+            const cleanChunk = chunk.replace(/\[METRICS:.*?\]/g, '');
+            if (cleanChunk) {
+              responseText += cleanChunk;
+              process.stdout.write(cleanChunk);
+            }
+            continue;
+          } catch {
+            // 解析失败，输出原始内容
+          }
+        }
+
         responseText += chunk;
         process.stdout.write(chunk);
       }
 
-      console.log('\n');
+      const elapsedMs = streamMetrics?.durationMs ?? (Date.now() - requestStart);
+      const outputChars = responseText.length;
+      const outputTokens = streamMetrics?.outputTokens ?? 0;
+      const inputTokens = streamMetrics?.inputTokens ?? 0;
+      const durationSec = elapsedMs / 1000;
+      const tps = durationSec > 0 && outputTokens > 0 ? outputTokens / durationSec : null;
+
+      runtimeMetrics.lastLatencyMs = elapsedMs;
+      runtimeMetrics.lastOutputChars = outputChars;
+      runtimeMetrics.lastInputTokens = inputTokens;
+      runtimeMetrics.lastOutputTokens = outputTokens;
+      runtimeMetrics.lastTps = tps;
+
+      if (tps !== null) {
+        runtimeMetrics.sampleCount += 1;
+        runtimeMetrics.avgTps = runtimeMetrics.avgTps === null
+          ? tps
+          : ((runtimeMetrics.avgTps * (runtimeMetrics.sampleCount - 1)) + tps) / runtimeMetrics.sampleCount;
+      }
+
+      const hasRealUsage = streamMetrics && streamMetrics.outputTokens !== null;
+      const tokensLabel = outputTokens > 0
+        ? `${outputTokens} tokens`
+        : `${outputChars} chars`;
+      const tpsLabel = hasRealUsage ? formatTps(tps) : '- (provider 未返回 usage)';
+      console.log(`\n${dim(`(耗时 ${formatLatency(elapsedMs)} | 输出 ${tokensLabel} | TPS ${tpsLabel})`)}\n`);
     } catch (err) {
       // 清除 "正在思考" 提示
       process.stdout.write('\r' + ' '.repeat(30) + '\r');
+      runtimeMetrics.lastLatencyMs = null;
+      runtimeMetrics.lastOutputChars = 0;
+      runtimeMetrics.lastInputTokens = 0;
+      runtimeMetrics.lastOutputTokens = 0;
+      runtimeMetrics.lastTps = null;
       console.error(red('❌') + ` 错误: ${err instanceof Error ? err.message : String(err)}`);
     }
 

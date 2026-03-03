@@ -59,11 +59,23 @@ export interface AgentInput {
   onToolUse?: (toolName: string, input: unknown) => void;
 }
 
+export interface AgentUsageMetrics {
+  inputTokens: number;
+  outputTokens: number;
+}
+
+export interface AgentRunMetrics {
+  durationMs: number;
+  model: string;
+  usage?: AgentUsageMetrics;
+}
+
 export interface AgentOutput {
   status: 'success' | 'error';
   result: string | null;
   newSessionId?: string;
   error?: string;
+  metrics?: AgentRunMetrics;
 }
 
 // ==================== 工具系统 ====================
@@ -260,21 +272,6 @@ async function sleep(ms: number): Promise<void> {
 // ==================== Agent Execution ====================
 
 /**
- * 动态生成可用工具列表
- */
-function getAvailableToolsList(): string {
-  const tools = getAllTools();
-  if (tools.length === 0) {
-    return '暂无可用工具';
-  }
-  
-  return tools.map(tool => {
-    const desc = tool.description || '无描述';
-    return `- ${tool.name}: ${desc}`;
-  }).join('\n');
-}
-
-/**
  * 获取群组的系统提示词
  */
 function getGroupSystemPrompt(group: RegisteredGroup, isMain: boolean, isScheduledTask?: boolean): string {
@@ -284,9 +281,6 @@ function getGroupSystemPrompt(group: RegisteredGroup, isMain: boolean, isSchedul
   const now = new Date();
   const currentTimeISO = now.toISOString();
   const currentTimeLocal = now.toLocaleString('zh-CN', { timeZone: TIMEZONE });
-  
-  // 动态获取可用工具列表
-  const toolsList = getAvailableToolsList();
   
   // 读取群组的 CLAUDE.md 文件（如果存在）
   const groupDir = path.join(paths.groups(), group.folder);
@@ -341,8 +335,9 @@ function getGroupSystemPrompt(group: RegisteredGroup, isMain: boolean, isSchedul
 - ISO 时间: ${currentTimeISO}
 - 时区: ${TIMEZONE}
 
-## 可用工具
-${toolsList}
+## 工具使用原则
+- 优先直接回答用户问题。
+- 只有在需要外部操作（如发送消息、浏览器操作、网络抓取、任务管理）时才调用工具。
 
 ## 发送截图（重要！）
 截图后必须使用 send_message 工具发送给用户：
@@ -411,7 +406,7 @@ export async function runAgent(
     if (attempt > 0) {
       const delay = calculateDelay(attempt - 1, retryConfig);
       logger.info({ 
-        group: group.name, 
+        group: group.folder, 
         attempt, 
         delay,
         lastError 
@@ -477,7 +472,7 @@ async function runAgentOnce(
   const timeout = group.agentConfig?.timeout || AGENT_TIMEOUT;
 
   logger.info({
-    group: group.name,
+    group: group.folder,
     isMain: input.isMain,
     attempt,
     timeout
@@ -497,7 +492,7 @@ async function runAgentOnce(
 
   // 获取对话上下文
   const context = memoryManager.getContext(group.folder);
-  
+
   // 检查当前模型是否支持图片输入
   const supportsVision = currentModelSupportsVision();
   const currentModel = getCurrentModelId();
@@ -542,7 +537,7 @@ async function runAgentOnce(
     
     userContent = contentBlocks;
     logger.info({ 
-      group: group.name, 
+      group: group.folder, 
       model: currentModel,
       textBlocks: contentBlocks.filter(b => b.type === 'text').length,
       imageBlocks: contentBlocks.filter(b => b.type === 'image').length 
@@ -551,7 +546,7 @@ async function runAgentOnce(
     // 模型不支持图片，只发送文本
     userContent = input.prompt + `\n\n[用户发送了 ${input.attachments.length} 张图片，但当前模型 ${currentModel} 不支持图片输入]`;
     logger.info({ 
-      group: group.name, 
+      group: group.folder, 
       model: currentModel,
       imageCount: input.attachments.length 
     }, '⚠️ 当前模型不支持图片输入');
@@ -575,7 +570,7 @@ async function runAgentOnce(
   
   // 调试：打印可用工具
   logger.info({ 
-    group: group.name, 
+    group: group.folder, 
     toolCount: tools.length,
     toolNames: tools.map(t => t.name)
   }, '⚡ 可用工具列表');
@@ -596,7 +591,7 @@ async function runAgentOnce(
   if (!ctxCheck.safe) {
     // 剩余空间严重不足（低于 CONTEXT_MIN_TOKENS），直接返回错误
     logger.error({
-      group: group.name,
+      group: group.folder,
       usedTokens,
       modelContextWindow,
       error: ctxCheck.error,
@@ -612,7 +607,7 @@ async function runAgentOnce(
   if (ctxCheck.shouldCompact) {
     // 空间紧张（低于 CONTEXT_WARN_TOKENS），自动触发压缩后继续
     logger.warn({
-      group: group.name,
+      group: group.folder,
       usedTokens,
       modelContextWindow,
       warning: ctxCheck.warning,
@@ -629,7 +624,7 @@ async function runAgentOnce(
 
     const newTokensEstimate = memoryManager.estimateTokens(messages) + systemTokensEstimate;
     logger.info({
-      group: group.name,
+      group: group.folder,
       beforeTokens: usedTokens,
       afterTokens: newTokensEstimate,
       saved: usedTokens - newTokensEstimate,
@@ -646,7 +641,7 @@ async function runAgentOnce(
     }
     activityTimer = setTimeout(() => {
       isTimedOut = true;
-      logger.error({ group: group.name }, 'Agent timeout (no activity)');
+      logger.error({ group: group.folder }, 'Agent timeout (no activity)');
     }, timeout);
   };
   
@@ -666,7 +661,7 @@ async function runAgentOnce(
     let stopReason: string | null = null;
     let usage: { input_tokens: number; output_tokens: number } | null = null;
 
-    logger.info({ group: group.name }, '⚡ 开始流式请求');
+    logger.info({ group: group.folder }, '⚡ 开始流式请求');
 
     for await (const event of apiProvider.chatStream(messages, {
       system: systemPrompt,
@@ -699,7 +694,7 @@ async function runAgentOnce(
 
     // 调试：打印 API 响应
     logger.info({
-      group: group.name,
+      group: group.folder,
       stopReason,
     }, '⚡ API 响应');
 
@@ -720,29 +715,19 @@ async function runAgentOnce(
 
     let result: string;
 
-    // 检查是否有工具调用（需要在流式处理中收集 tool_use 事件）
-    // 由于流式处理已经完成，我们需要检查是否有 tool_use 事件被触发
-    // 这里使用 stopReason 来判断
-    if (stopReason === 'tool_use') {
+    // 检查是否有工具调用
+    // 兼容不同 provider 的 stop_reason：Anthropic 用 'tool_use'，OpenAI/Ollama 用 'tool_calls'
+    if (stopReason === 'tool_use' || stopReason === 'tool_calls') {
       // 处理工具调用（使用活动超时 + 心跳）
-      // 注意：由于我们不再保存完整的 finalResponse，需要在流式处理时收集 tool_use 信息
-      // 但为了简化，这里需要 provider 返回完整的响应信息
-      // 暂时使用一个简化方案：重新调用 chat 获取 tool_use 信息
+      // 直接使用 provider 的 handleToolUse 方法处理（兼容不同 provider 格式）
       resetActivityTimeout();
 
-      // 直接使用 chat 方法获取完整响应以处理工具调用
+      // 获取完整响应用于工具调用
       const chatResponse = await apiProvider.chat(messages, {
         system: systemPrompt,
         tools,
         maxTokens: AI_MAX_OUTPUT_TOKENS
-      }) as Anthropic.Message;
-
-      // 触发工具调用回调
-      for (const block of chatResponse.content) {
-        if (block.type === 'tool_use') {
-          input.onToolUse?.(block.name, block.input);
-        }
-      }
+      });
 
       result = await apiProvider.handleToolUse(
         chatResponse,
@@ -771,13 +756,13 @@ async function runAgentOnce(
 
     // 检查是否需要压缩上下文
     if (memoryManager.needsCompaction(group.folder)) {
-      logger.info({ group: group.name }, 'Compacting conversation context');
+      logger.info({ group: group.folder }, 'Compacting conversation context');
       await memoryManager.compact(group.folder, apiProvider);
     }
 
     const duration = Date.now() - startTime;
     logger.info({
-      group: group.name,
+      group: group.folder,
       duration,
       status: 'success',
       hasResult: !!result
@@ -785,7 +770,17 @@ async function runAgentOnce(
 
     return {
       status: 'success',
-      result
+      result,
+      metrics: {
+        durationMs: duration,
+        model: getCurrentModelId(),
+        usage: usage
+          ? {
+              inputTokens: usage.input_tokens || 0,
+              outputTokens: usage.output_tokens || 0,
+            }
+          : undefined,
+      },
     };
 
   } catch (err) {
@@ -795,7 +790,7 @@ async function runAgentOnce(
     const duration = Date.now() - startTime;
 
     logger.error({
-      group: group.name,
+      group: group.folder,
       duration,
       error: errorMessage
     }, 'Agent error');
@@ -803,7 +798,11 @@ async function runAgentOnce(
     return {
       status: 'error',
       result: null,
-      error: errorMessage
+      error: errorMessage,
+      metrics: {
+        durationMs: duration,
+        model: getCurrentModelId(),
+      },
     };
   }
 }

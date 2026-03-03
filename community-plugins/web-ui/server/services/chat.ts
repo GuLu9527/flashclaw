@@ -5,8 +5,10 @@
 
 import { randomUUID } from 'crypto';
 
-// Web UI 聊天会话 ID
-const WEB_CHAT_JID = 'web-ui-chat';
+// 根据 group 名称生成聊天会话 ID
+function getChatJid(groupName: string): string {
+  return `${groupName}-chat`;
+}
 
 // 使用全局数据库实例
 function getDb() {
@@ -39,16 +41,29 @@ export interface ChatMessage {
   timestamp: string;
 }
 
+interface AgentUsageMetrics {
+  inputTokens: number;
+  outputTokens: number;
+}
+
+interface AgentRunMetrics {
+  durationMs: number;
+  model: string;
+  usage?: AgentUsageMetrics;
+}
+
 interface AgentResult {
   status: 'success' | 'error';
   result?: string | null;
   error?: string;
+  metrics?: AgentRunMetrics;
 }
 
 /**
  * 获取聊天历史
  */
-export function getChatHistory(limit = 50): ChatMessage[] {
+export function getChatHistory(group = 'main', limit = 50): ChatMessage[] {
+  const chatJid = getChatJid(group);
   try {
     const db = getDb();
     const messages = db.prepare(`
@@ -57,7 +72,7 @@ export function getChatHistory(limit = 50): ChatMessage[] {
       WHERE chat_jid = ?
       ORDER BY timestamp DESC
       LIMIT ?
-    `).all(WEB_CHAT_JID, limit);
+    `).all(chatJid, limit);
 
     return messages.reverse().map((msg: any) => ({
       id: msg.id,
@@ -73,47 +88,56 @@ export function getChatHistory(limit = 50): ChatMessage[] {
 /**
  * 保存消息到数据库
  */
-function saveMessage(role: 'user' | 'assistant', content: string): string {
+function saveMessage(role: 'user' | 'assistant', content: string, group: string): string {
+  const chatJid = getChatJid(group);
+  const chatName = group === 'web-ui' ? 'Web UI Chat' : group === 'main' ? 'CLI Chat' : `${group} Chat`;
   const db = getDb();
   const id = randomUUID();
   const timestamp = new Date().toISOString();
-  
+
   // 确保 chat 记录存在
   db.prepare(`
     INSERT OR IGNORE INTO chats (jid, name, last_message_time)
     VALUES (?, ?, ?)
-  `).run(WEB_CHAT_JID, 'Web UI Chat', timestamp);
-  
+  `).run(chatJid, chatName, timestamp);
+
   // 更新最后消息时间
   db.prepare(`
     UPDATE chats SET last_message_time = ? WHERE jid = ?
-  `).run(timestamp, WEB_CHAT_JID);
-  
+  `).run(timestamp, chatJid);
+
   // 保存消息
   db.prepare(`
     INSERT INTO messages (id, chat_jid, sender, sender_name, content, timestamp)
     VALUES (?, ?, ?, ?, ?, ?)
-  `).run(id, WEB_CHAT_JID, role, role === 'user' ? '用户' : 'FlashClaw', content, timestamp);
+  `).run(id, chatJid, role, role === 'user' ? '用户' : 'FlashClaw', content, timestamp);
   
   return id;
 }
 
 /**
- * 获取 main 群组配置
+ * 根据 group 名称获取群组配置
  */
-function resolveMainGroup() {
+function resolveGroup(groupName: string) {
   const groups = getRegisteredGroups();
-  let mainGroup = groups.get('main');
+  let group = groups.get(groupName);
 
-  if (!mainGroup) {
-    mainGroup = {
-      folder: 'main',
-      name: 'Web UI',
+  if (!group) {
+    // 如果是 CLI 传递的 group，使用 'main' 群组的配置
+    group = groups.get('main');
+  }
+
+  if (!group) {
+    // 如果没有注册任何群组，创建默认配置
+    const isWebUI = groupName === 'web-ui';
+    group = {
+      folder: groupName,
+      name: isWebUI ? 'Web UI' : 'CLI',
       agentConfig: { timeout: 120000 }
     };
   }
 
-  return mainGroup;
+  return group;
 }
 
 /**
@@ -151,53 +175,62 @@ function finalizeStreamedResponse(
  */
 async function sendMessageInternal(
   userMessage: string,
+  groupName: string,
   onToken?: (chunk: string) => void,
-  onToolUse?: (toolName: string, input: unknown) => void
+  onToolUse?: (toolName: string, input: unknown) => void,
+  onMetrics?: (metrics: AgentRunMetrics) => void
 ): Promise<string> {
+  const chatJid = getChatJid(groupName);
+
   // 保存用户消息
-  saveMessage('user', userMessage);
+  saveMessage('user', userMessage, groupName);
 
   try {
     const runAgent = getRunAgent();
     if (!runAgent) {
       const errorMsg = 'Agent 未初始化，请确保 FlashClaw 正常启动';
       const finalText = `错误: ${errorMsg}`;
-      saveMessage('assistant', finalText);
+      saveMessage('assistant', finalText, groupName);
       onToken?.(finalText);
       return finalText;
     }
 
-    const mainGroup = resolveMainGroup();
+    const group = resolveGroup(groupName);
+    const isMain = groupName === 'main';
     let streamed = '';
 
-    const result = await runAgent(mainGroup, {
+    const result = await runAgent(group, {
       prompt: userMessage,
-      groupFolder: 'main',
-      chatJid: WEB_CHAT_JID,
-      isMain: true,
-      userId: 'web-user',
+      groupFolder: group.folder,
+      chatJid,
+      isMain,
+      userId: isMain ? 'web-user' : 'cli-user',
       onToken: onToken ? (chunk: string) => {
         streamed += chunk;
         onToken(chunk);
       } : undefined,
       onToolUse: onToolUse
     }) as AgentResult;
-    
+
+    if (result.metrics) {
+      onMetrics?.(result.metrics);
+    }
+
     if (result.status === 'success' && result.result) {
       const finalText = finalizeStreamedResponse(streamed, String(result.result), onToken);
-      saveMessage('assistant', finalText);
+      saveMessage('assistant', finalText, groupName);
       return finalText;
     } else {
       const errorMsg = result.error || '未收到响应';
       const finalText = finalizeStreamedResponse(streamed, `错误: ${errorMsg}`, onToken);
-      saveMessage('assistant', finalText);
+      saveMessage('assistant', finalText, groupName);
       return finalText;
     }
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : '发生未知错误';
     const finalText = `错误: ${errorMsg}`;
     onToken?.(finalText);
-    saveMessage('assistant', finalText);
+    saveMessage('assistant', finalText, groupName);
     return finalText;
   }
 }
@@ -205,8 +238,8 @@ async function sendMessageInternal(
 /**
  * 发送消息并获取 AI 回复（非流式）
  */
-export async function sendMessage(userMessage: string): Promise<string> {
-  return sendMessageInternal(userMessage);
+export async function sendMessage(userMessage: string, group = 'main'): Promise<string> {
+  return sendMessageInternal(userMessage, group);
 }
 
 /**
@@ -214,19 +247,22 @@ export async function sendMessage(userMessage: string): Promise<string> {
  */
 export async function sendMessageStream(
   userMessage: string,
+  group = 'main',
   onToken: (chunk: string) => void,
-  onToolUse?: (toolName: string, input: unknown) => void
+  onToolUse?: (toolName: string, input: unknown) => void,
+  onMetrics?: (metrics: AgentRunMetrics) => void
 ): Promise<string> {
-  return sendMessageInternal(userMessage, onToken, onToolUse);
+  return sendMessageInternal(userMessage, group, onToken, onToolUse, onMetrics);
 }
 
 /**
  * 清空聊天历史
  */
-export function clearChatHistory(): boolean {
+export function clearChatHistory(group = 'main'): boolean {
+  const chatJid = getChatJid(group);
   try {
     const db = getDb();
-    db.prepare('DELETE FROM messages WHERE chat_jid = ?').run(WEB_CHAT_JID);
+    db.prepare('DELETE FROM messages WHERE chat_jid = ?').run(chatJid);
     return true;
   } catch {
     return false;

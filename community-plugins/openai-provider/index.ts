@@ -18,6 +18,7 @@ import type {
 
 let client: OpenAI | null = null;
 let model: string = 'gpt-4o-mini';
+let baseURL: string = 'https://api.openai.com/v1';
 
 // ==================== 常量 ====================
 
@@ -81,6 +82,32 @@ function convertMessages(messages: ChatMessage[]): OpenAI.Chat.ChatMessage[] {
   });
 }
 
+function buildChatMessages(messages: ChatMessage[], system?: string): OpenAI.Chat.ChatMessage[] {
+  const chatMessages: OpenAI.Chat.ChatMessage[] = [];
+  if (system) {
+    chatMessages.push({ role: 'system', content: system });
+  }
+  chatMessages.push(...convertMessages(messages));
+  return chatMessages;
+}
+
+function shouldUseOllamaExtraBody(url: string): boolean {
+  return url.includes('localhost') || url.includes('127.0.0.1') || url.includes('ollama');
+}
+
+function applyOllamaContextWindow(
+  params: OpenAI.Chat.ChatCompletionCreateParams & { extra_body?: Record<string, unknown> }
+): void {
+  if (!shouldUseOllamaExtraBody(baseURL)) {
+    return;
+  }
+
+  const numCtx = parseInt(process.env.OPENAI_NUM_CTX || '0', 10);
+  if (Number.isFinite(numCtx) && numCtx > 0) {
+    params.extra_body = { num_ctx: numCtx };
+  }
+}
+
 function extractTextFromResponse(response: OpenAI.Chat.ChatCompletion): string {
   const message = response.choices[0]?.message;
   if (!message) return '';
@@ -106,7 +133,7 @@ const openaiProvider: AIProviderPlugin = {
 
   async init(config: PluginConfig): Promise<void> {
     const apiKey = config.apiKey || process.env.OPENAI_API_KEY || 'dummy';
-    const baseURL = config.baseURL || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
+    baseURL = config.baseURL || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
 
     client = new OpenAI({
       apiKey,
@@ -131,10 +158,10 @@ const openaiProvider: AIProviderPlugin = {
       throw new Error('OpenAI client not initialized. Call init() first.');
     }
 
-    const chatMessages = convertMessages(messages);
+    const chatMessages = buildChatMessages(messages, options?.system);
     const tools = convertTools(options?.tools);
 
-    const params: OpenAI.Chat.ChatCompletionCreateParams = {
+    const params: OpenAI.Chat.ChatCompletionCreateParams & { extra_body?: Record<string, unknown> } = {
       model,
       messages: chatMessages,
       max_tokens: options?.maxTokens || 4096,
@@ -142,6 +169,8 @@ const openaiProvider: AIProviderPlugin = {
       tools,
       stream: false,
     };
+
+    applyOllamaContextWindow(params);
 
     if (options?.stopSequences) {
       params.stop = options.stopSequences;
@@ -159,17 +188,23 @@ const openaiProvider: AIProviderPlugin = {
       throw new Error('OpenAI client not initialized. Call init() first.');
     }
 
-    const chatMessages = convertMessages(messages);
+    const chatMessages = buildChatMessages(messages, options?.system);
     const tools = convertTools(options?.tools);
 
-    const params: OpenAI.Chat.ChatCompletionCreateParams = {
+    const params: OpenAI.Chat.ChatCompletionCreateParams & {
+      extra_body?: Record<string, unknown>;
+      stream_options?: { include_usage?: boolean };
+    } = {
       model,
       messages: chatMessages,
       max_tokens: options?.maxTokens || 4096,
       temperature: options?.temperature,
       tools,
       stream: true,
+      stream_options: { include_usage: true },
     };
+
+    applyOllamaContextWindow(params);
 
     if (options?.stopSequences) {
       params.stop = options.stopSequences;
@@ -179,9 +214,19 @@ const openaiProvider: AIProviderPlugin = {
 
     let finalContent = '';
     let hasToolCalls = false;
+    let finishReason: string | null = null;
+    let usage: { input_tokens?: number; output_tokens?: number } | undefined;
 
     for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta;
+      const choice = chunk.choices[0];
+      const delta = choice?.delta;
+
+      if (chunk.usage) {
+        usage = {
+          input_tokens: chunk.usage.prompt_tokens ?? usage?.input_tokens,
+          output_tokens: chunk.usage.completion_tokens ?? usage?.output_tokens,
+        };
+      }
 
       if (delta?.content) {
         finalContent += delta.content;
@@ -200,16 +245,19 @@ const openaiProvider: AIProviderPlugin = {
         }
       }
 
-      // 检查是否结束
-      if (chunk.choices[0]?.finish_reason) {
-        yield {
-          type: 'done',
-          message: {
-            choices: [{ message: { content: finalContent, tool_calls: hasToolCalls ? [] : undefined } }],
-          },
-        };
+      if (choice?.finish_reason) {
+        finishReason = choice.finish_reason;
       }
     }
+
+    yield {
+      type: 'done',
+      message: {
+        stop_reason: finishReason || 'stop',
+        usage,
+        choices: [{ message: { content: finalContent, tool_calls: hasToolCalls ? [] : undefined } }],
+      },
+    };
   },
 
   async handleToolUse(
