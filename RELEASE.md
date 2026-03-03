@@ -13,19 +13,19 @@
 
 ## 发布步骤
 
-1. 更新版本号（`package.json`）
-2. 更新 `CHANGELOG.md`
-3. 更新 `docs/PLUGINS_CHANGELOG.md`（内置/社区插件变更）
+1. 更新 `CHANGELOG.md`（将 `[Unreleased]` 改为 `[X.Y.Z] - YYYY-MM-DD`）
+2. 更新 `docs/PLUGINS_CHANGELOG.md`（如有插件变更）
+3. 更新 `CLAUDE.md` 版本历史表
 4. 提交版本变更
-  `git commit -m "chore: bump version to X.Y.Z"`
-5. 打标签
-  `git tag -a vX.Y.Z -m "Release vX.Y.Z"`
-6. 推送提交与标签
-  `git push && git push --tags`
-7. 打包构建
-  `npm run build`
-8. 发布到 npm
-  `npm publish`
+   `git commit -m "release: 准备 vX.Y.Z 发布"`
+5. 更新版本号（自动更新 package.json）
+   `npm version X.Y.Z --no-git-tag-version`
+6. 提交并打标签
+   `git add package.json package-lock.json && git commit -m "X.Y.Z" && git tag vX.Y.Z`
+7. 推送提交与标签
+   `git push && git push --tags`
+8. 发布到 npm（自动执行 build）
+   `npm publish`
 9. 创建 GitHub Release（填写更新日志）
 
 ## 版本号规则

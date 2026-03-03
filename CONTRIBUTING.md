@@ -66,30 +66,45 @@ flashclaw/
 │   ├── index.ts              # 主入口、消息路由
 │   ├── cli.ts                # CLI 命令行工具
 │   ├── agent-runner.ts       # AI Agent 运行器
+│   ├── channel-manager.ts    # 渠道管理器
 │   ├── config.ts             # 配置常量
 │   ├── types.ts              # 核心类型定义
+│   ├── errors.ts             # 自定义错误类
 │   ├── db.ts                 # 数据库操作
 │   ├── message-queue.ts      # 消息队列
 │   ├── task-scheduler.ts     # 定时任务调度
+│   ├── session-tracker.ts    # Token 用量追踪
+│   ├── health.ts             # 健康检查服务
+│   ├── paths.ts              # 路径管理
 │   ├── utils.ts              # 工具函数
 │   │
-│   ├── core/                 # 核心模块（向后兼容）
-│   │   ├── api-client.ts     # 向后兼容的 AI 客户端
+│   ├── core/                 # 核心模块
+│   │   ├── api-client.ts     # AI API 客户端（向后兼容）
 │   │   ├── memory.ts         # 记忆管理
-│   │   └── model-capabilities.ts  # 模型能力检测
+│   │   ├── model-capabilities.ts  # 模型能力检测
+│   │   └── context-guard.ts  # 上下文窗口保护
 │   │
 │   ├── commands/             # CLI 子命令
 │   │   ├── init.ts           # 交互式初始化向导
-│   │   └── doctor.ts         # 环境诊断
+│   │   ├── doctor.ts         # 环境诊断
+│   │   ├── security.ts       # 安全审计
+│   │   └── daemon.ts         # 后台服务管理
+│   │
+│   ├── utils/                # 工具模块
+│   │   ├── network.ts        # 网络工具（IP 检测、URL 提取）
+│   │   ├── env-substitute.ts # 环境变量替换
+│   │   └── rate-limiter.ts   # 速率限制
 │   │
 │   └── plugins/              # 插件系统
 │       ├── index.ts          # 插件系统入口
 │       ├── manager.ts        # 插件管理器
 │       ├── loader.ts         # 插件加载器
+│       ├── installer.ts      # 插件安装器
 │       └── types.ts          # 插件类型定义
 │
-├── plugins/                   # 插件目录
-│   ├── feishu/               # 飞书渠道插件
+├── plugins/                   # 内置插件（10个）
+│   ├── anthropic-provider/   # Anthropic AI Provider（默认）
+│   ├── cli-channel/          # CLI 终端渠道
 │   ├── send-message/         # 发送消息工具
 │   ├── schedule-task/        # 创建定时任务
 │   ├── list-tasks/           # 列出定时任务
@@ -99,8 +114,17 @@ flashclaw/
 │   ├── memory/               # 长期记忆
 │   └── register-group/       # 注册群组
 │
+├── community-plugins/         # 社区/官方扩展插件
+│   ├── feishu/               # 飞书渠道
+│   ├── telegram/             # Telegram 渠道
+│   ├── openai-provider/      # OpenAI/Ollama Provider
+│   ├── hello-world/          # 测试插件
+│   ├── web-fetch/            # 网页内容获取
+│   ├── browser-control/      # 浏览器自动化控制
+│   └── web-ui/               # Web 管理界面
+│
 ├── docs/                      # 文档
-├── groups/                    # 群组记忆（模板）
+├── groups/                    # 群组记忆
 └── assets/                    # 图片资源
 ```
 

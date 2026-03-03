@@ -82,28 +82,29 @@ flashclaw plugins install hello-world
 FlashClaw 采用乐高式插件架构，添加功能就像放 Minecraft Mod 一样简单：
 
 ```
-plugins/
-├── feishu/          # 飞书渠道插件（内置）
-├── send-message/    # 发送消息工具
+plugins/                   # 内置插件（10个）
+├── anthropic-provider/    # Anthropic AI Provider（默认）
+├── cli-channel/           # CLI 终端渠道
+├── send-message/          # 发送消息工具
+├── schedule-task/         # 创建定时任务
+├── list-tasks/            # 列出定时任务
+├── cancel-task/           # 取消定时任务
+├── pause-task/            # 暂停定时任务
+├── resume-task/           # 恢复定时任务
+├── memory/                # 长期记忆（remember/recall）
+└── register-group/        # 注册群组
 
-community-plugins/
-├── telegram/        # Telegram 渠道插件（社区）
-├── hello-world/     # 示例插件
-├── web-fetch/       # 网页抓取工具
-├── web-ui/          # Web 管理界面
-└── browser-control/ # 浏览器控制工具
+community-plugins/         # 社区/官方扩展插件
+├── feishu/                # 飞书渠道插件
+├── telegram/              # Telegram 渠道插件
+├── openai-provider/       # OpenAI/Ollama/LocalAI Provider
+├── hello-world/           # 示例插件
+├── web-fetch/             # 网页抓取工具
+├── web-ui/                # Web 管理界面
+└── browser-control/       # 浏览器控制工具
 
-~/.flashclaw/plugins/  # 用户安装的插件目录
-├── telegram/        # flashclaw plugins install telegram
-├── send-message/    # 发送消息工具
-├── schedule-task/   # 创建定时任务
-├── list-tasks/      # 列出定时任务
-├── cancel-task/     # 取消定时任务
-├── pause-task/      # 暂停定时任务
-├── resume-task/     # 恢复定时任务
-├── memory/          # 长期记忆（remember/recall）
-├── register-group/  # 注册群组
-└── my-plugin/       # 你的自定义插件
+~/.flashclaw/plugins/      # 用户安装的插件目录
+└── my-plugin/             # 你的自定义插件
 ```
 
 ### 插件类型
@@ -209,8 +210,9 @@ flashclaw/
 │       ├── installer.ts     # 插件安装器
 │       └── types.ts         # 插件类型定义
 │
-├── plugins/                  # 内置插件（9个）
-│   ├── feishu/              # 飞书渠道
+├── plugins/                  # 内置插件（10个）
+│   ├── anthropic-provider/  # Anthropic AI Provider（默认）
+│   ├── cli-channel/         # CLI 终端渠道
 │   ├── memory/              # 长期记忆
 │   ├── schedule-task/       # 定时任务
 │   ├── list-tasks/          # 列出任务
@@ -221,6 +223,9 @@ flashclaw/
 │   └── register-group/      # 注册群组
 │
 └── community-plugins/        # 社区/官方扩展插件
+    ├── feishu/              # 飞书渠道
+    ├── telegram/            # Telegram 渠道
+    ├── openai-provider/     # OpenAI/Ollama Provider
     ├── hello-world/         # 测试插件
     ├── web-fetch/           # 网页内容获取
     ├── browser-control/     # 浏览器自动化控制
@@ -266,7 +271,7 @@ FlashClaw 支持通过 `SOUL.md` 文件自定义 AI 的人格和语调：
 ```bash
 CONTEXT_WINDOW_SIZE=200000     # 覆盖内置模型上下文窗口大小
 CONTEXT_MIN_TOKENS=16000       # 剩余 token 低于此值拒绝运行
-CONTEXT_WARN_TOKENS=16000      # 剩余 token 低于此值自动压缩
+CONTEXT_WARN_TOKENS=32000      # 剩余 token 低于此值自动压缩（应大于 MIN）
 ```
 
 ### 智能响应

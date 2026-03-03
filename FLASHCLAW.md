@@ -14,44 +14,72 @@
 ```
 flashclaw/
 ├── src/
-│   ├── index.ts           # 主入口、消息路由
-│   ├── cli.ts             # CLI 命令行工具
-│   ├── commands/          # CLI 子命令
-│   │   ├── init.ts        # 交互式初始化向导
-│   │   └── doctor.ts      # 环境诊断
-│   ├── agent-runner.ts    # AI Agent 运行器
-│   ├── config.ts          # 配置常量
-│   ├── types.ts           # 核心类型定义
-│   ├── db.ts              # SQLite 数据库
-│   ├── message-queue.ts   # 消息队列
-│   ├── task-scheduler.ts  # 定时任务调度
-│   ├── utils.ts           # 工具函数
+│   ├── index.ts              # 主入口、消息路由
+│   ├── cli.ts                # CLI 命令行工具
+│   ├── commands/             # CLI 子命令
+│   │   ├── init.ts           # 交互式初始化向导
+│   │   ├── doctor.ts         # 环境诊断
+│   │   ├── security.ts       # 安全审计
+│   │   └── daemon.ts         # 后台服务管理
+│   ├── agent-runner.ts       # AI Agent 运行器
+│   ├── channel-manager.ts    # 渠道管理器
+│   ├── config.ts             # 配置常量
+│   ├── config-schema.ts      # 配置校验 Schema
+│   ├── types.ts              # 核心类型定义
+│   ├── errors.ts             # 自定义错误类
+│   ├── db.ts                 # SQLite 数据库
+│   ├── message-queue.ts      # 消息队列
+│   ├── task-scheduler.ts     # 定时任务调度
+│   ├── session-tracker.ts    # Token 用量追踪
+│   ├── health.ts             # 健康检查服务
+│   ├── metrics.ts            # 运行指标收集
+│   ├── logger.ts             # 日志工厂
+│   ├── paths.ts              # 路径管理
+│   ├── utils.ts              # 工具函数
 │   │
-│   ├── core/              # 核心模块
-│   │   ├── api-client.ts  # AI API 客户端
-│   │   ├── memory.ts      # 记忆管理
-│   │   └── model-capabilities.ts  # 模型能力检测
+│   ├── core/                 # 核心模块
+│   │   ├── api-client.ts     # AI API 客户端（向后兼容）
+│   │   ├── memory.ts         # 记忆管理
+│   │   ├── model-capabilities.ts  # 模型能力检测
+│   │   └── context-guard.ts  # 上下文窗口保护
 │   │
-│   └── plugins/           # 插件系统
-│       ├── index.ts       # 插件系统入口
-│       ├── manager.ts     # 插件管理器
-│       ├── loader.ts      # 插件加载器
-│       └── types.ts       # 插件类型定义
+│   ├── utils/                # 工具模块
+│   │   ├── network.ts        # 网络工具（IP 检测、URL 提取）
+│   │   ├── env-substitute.ts # 环境变量替换
+│   │   ├── log-rotate.ts     # 日志轮转
+│   │   ├── rate-limiter.ts   # 速率限制
+│   │   └── retry.ts          # 重试工具
+│   │
+│   └── plugins/              # 插件系统
+│       ├── index.ts          # 插件系统入口
+│       ├── manager.ts        # 插件管理器
+│       ├── loader.ts         # 插件加载器
+│       ├── installer.ts      # 插件安装器
+│       └── types.ts          # 插件类型定义
 │
-├── plugins/               # 插件目录（热加载）
-│   ├── feishu/           # 飞书渠道插件
-│   ├── send-message/     # 发送消息工具
-│   ├── schedule-task/    # 创建定时任务
-│   ├── list-tasks/       # 列出定时任务
-│   ├── cancel-task/      # 取消定时任务
-│   ├── pause-task/       # 暂停定时任务
-│   ├── resume-task/      # 恢复定时任务
-│   ├── memory/           # 长期记忆
-│   └── register-group/   # 注册群组
+├── plugins/                  # 内置插件（10个）
+│   ├── anthropic-provider/   # Anthropic AI Provider（默认）
+│   ├── cli-channel/          # CLI 终端渠道
+│   ├── send-message/         # 发送消息工具
+│   ├── schedule-task/        # 创建定时任务
+│   ├── list-tasks/           # 列出定时任务
+│   ├── cancel-task/          # 取消定时任务
+│   ├── pause-task/           # 暂停定时任务
+│   ├── resume-task/          # 恢复定时任务
+│   ├── memory/               # 长期记忆
+│   └── register-group/       # 注册群组
 │
-├── groups/                # 群组记忆
-├── data/                  # 运行时数据
-└── store/                 # 持久化存储
+├── community-plugins/        # 社区/官方扩展插件
+│   ├── feishu/               # 飞书渠道
+│   ├── telegram/             # Telegram 渠道
+│   ├── openai-provider/      # OpenAI/Ollama Provider
+│   ├── hello-world/          # 测试插件
+│   ├── web-fetch/            # 网页内容获取
+│   ├── browser-control/      # 浏览器自动化控制
+│   └── web-ui/               # Web 管理界面
+│
+├── groups/                   # 群组记忆
+└── data/                     # 运行时数据
 ```
 
 ---
@@ -149,6 +177,7 @@ interface ToolContext {
   groupId: string;       // 群组文件夹名（同 groupFolder）
   userId: string;        // 用户 ID（用于用户级别记忆）
   sendMessage: (content: string) => Promise<void>;  // 发送消息到当前聊天
+  sendImage: (imageData: string, caption?: string) => Promise<void>;  // 发送图片（data URL 或 base64）
 }
 ```
 
@@ -219,6 +248,82 @@ const plugin: ToolPlugin = {
   }
 };
 ```
+
+---
+
+## AI Provider 插件开发
+
+Provider 插件为 FlashClaw 提供 AI 模型接入能力。
+
+### 基本结构
+
+```typescript
+// plugins/my-provider/index.ts
+import type {
+  AIProviderPlugin,
+  ChatMessage,
+  ChatOptions,
+  StreamEvent,
+  ToolExecutor,
+  HeartbeatCallback,
+  PluginConfig,
+} from '../../src/plugins/types';
+
+const provider: AIProviderPlugin = {
+  name: 'my-provider',
+  version: '1.0.0',
+  description: '我的 AI Provider',
+
+  async init(config: PluginConfig): Promise<void> {
+    // 初始化客户端（API Key、Base URL 等）
+  },
+
+  async chat(messages: ChatMessage[], options?: ChatOptions): Promise<unknown> {
+    // 非流式调用，返回完整响应
+  },
+
+  async *chatStream(messages: ChatMessage[], options?: ChatOptions): AsyncGenerator<StreamEvent> {
+    // 流式调用，通过 yield 发出事件：
+    // yield { type: 'text', text: '部分文本' };
+    // yield { type: 'tool_use', id: 'xxx', name: 'tool_name', input: {...} };
+    // yield { type: 'done', message: 完整响应对象 };
+  },
+
+  async handleToolUse(
+    response: unknown,
+    messages: ChatMessage[],
+    executeTool: ToolExecutor,
+    options?: ChatOptions,
+    heartbeat?: HeartbeatCallback
+  ): Promise<string> {
+    // 处理工具调用：执行工具 → 将结果追加到消息 → 继续调用 AI
+    // 递归处理直到没有更多工具调用
+  },
+
+  getModel(): string { return 'model-name'; },
+  setModel(model: string): void { /* 更新模型 */ },
+};
+
+export default provider;
+```
+
+### plugin.json
+
+```json
+{
+  "name": "my-provider",
+  "version": "1.0.0",
+  "type": "provider",
+  "description": "我的 AI Provider",
+  "main": "index.ts"
+}
+```
+
+### 注意事项
+
+- `chatStream` 的 `done` 事件必须包含完整的响应对象（含 `tool_calls` 数据），`agent-runner` 会直接传给 `handleToolUse`
+- `handleToolUse` 后续调用建议用流式 `chatStream`（本地模型更快）
+- 通过环境变量 `AI_PROVIDER=my-provider` 切换使用
 
 ---
 
