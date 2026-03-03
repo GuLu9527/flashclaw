@@ -4,7 +4,7 @@
  * 在调用 API 之前检查 token 使用量，防止超出模型上下文窗口限制。
  * 支持环境变量覆盖默认阈值：
  *   - CONTEXT_MIN_TOKENS  剩余 token 低于此值时拒绝运行（默认 16000）
- *   - CONTEXT_WARN_TOKENS 剩余 token 低于此值时建议压缩（默认 32000）
+ *   - CONTEXT_WARN_TOKENS 剩余 token 低于此值时建议压缩（默认 16000）
  */
 
 import { createLogger } from '../logger.js';
@@ -16,7 +16,7 @@ const logger = createLogger('ContextGuard');
 /** 最小剩余 token 阈值 — 低于此值直接拒绝请求 */
 const CONTEXT_MIN_TOKENS = parseEnvInt('CONTEXT_MIN_TOKENS', 16000);
 /** 警告剩余 token 阈值 — 低于此值建议压缩 */
-const CONTEXT_WARN_TOKENS = parseEnvInt('CONTEXT_WARN_TOKENS', 32000);
+const CONTEXT_WARN_TOKENS = parseEnvInt('CONTEXT_WARN_TOKENS', 16000);
 
 // ==================== 类型定义 ====================
 

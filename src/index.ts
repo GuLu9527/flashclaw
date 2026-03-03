@@ -369,7 +369,7 @@ async function processQueuedMessage(queuedMsg: QueuedMessage<Message>): Promise<
     })) || [];
 
   logger.info({ 
-    group: group.name, 
+    group: group.folder, 
     newMessages: missedMessages.length, 
     historyContext: historyMessages.length,
     platform: msg.platform,
@@ -752,13 +752,13 @@ async function executeAgent(group: RegisteredGroup, prompt: string, chatId: stri
     }
 
     if (output.status === 'error') {
-      logger.error({ group: group.name, error: output.error }, 'Agent 错误');
+      logger.error({ group: group.folder, error: output.error }, 'Agent 错误');
       throw new Error(`Agent 错误: ${output.error}`);
     }
 
     return output.result;
   } catch (err) {
-    logger.error({ group: group.name, err }, 'Agent 执行失败');
+    logger.error({ group: group.folder, err }, 'Agent 执行失败');
     throw err;
   }
 }
