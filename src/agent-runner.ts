@@ -57,6 +57,8 @@ export interface AgentInput {
   onToken?: (text: string) => void;
   /** 工具调用回调（可选） */
   onToolUse?: (toolName: string, input: unknown) => void;
+  /** 思考过程回调（可选，用于展示模型推理过程） */
+  onThinking?: (text: string) => void;
 }
 
 export interface AgentUsageMetrics {
@@ -814,7 +816,9 @@ async function runAgentOnce(
         throw new Error(`Agent timed out after ${timeout}ms of inactivity`);
       }
 
-      if (event.type === 'text') {
+      if (event.type === 'thinking') {
+        input.onThinking?.(event.text);
+      } else if (event.type === 'text') {
         responseText += event.text;
         input.onToken?.(event.text);
       } else if (event.type === 'tool_use') {

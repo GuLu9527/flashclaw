@@ -716,6 +716,7 @@ interface ExecuteAgentOptions {
   platform?: string;  // 消息来源平台
   onToken?: (chunk: string) => void;  // 流式输出回调
   onToolUse?: (name: string, input: unknown) => void;  // 工具调用回调
+  onThinking?: (text: string) => void;  // 思考过程回调
 }
 
 interface ExecuteAgentResult {
@@ -755,6 +756,7 @@ async function executeAgent(group: RegisteredGroup, prompt: string, chatId: stri
       attachments: options?.attachments,
       onToken: options?.onToken,
       onToolUse: options?.onToolUse,
+      onThinking: options?.onThinking,
     });
 
     if (output.newSessionId) {

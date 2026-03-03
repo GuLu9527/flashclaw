@@ -206,6 +206,11 @@ const openaiProvider: AIProviderPlugin = {
 
     applyOllamaContextWindow(params);
 
+    // 对 Ollama 本地模型启用 thinking（通过 extra_body）
+    if (shouldUseOllamaExtraBody(baseURL)) {
+      params.extra_body = { ...params.extra_body, think: true };
+    }
+
     if (options?.stopSequences) {
       params.stop = options.stopSequences;
     }
@@ -227,6 +232,12 @@ const openaiProvider: AIProviderPlugin = {
           input_tokens: chunk.usage.prompt_tokens ?? usage?.input_tokens,
           output_tokens: chunk.usage.completion_tokens ?? usage?.output_tokens,
         };
+      }
+
+      // Ollama thinking: delta.reasoning 字段
+      const reasoning = (delta as Record<string, unknown>)?.reasoning;
+      if (typeof reasoning === 'string' && reasoning) {
+        yield { type: 'thinking', text: reasoning };
       }
 
       if (delta?.content) {

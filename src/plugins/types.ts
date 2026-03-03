@@ -196,6 +196,7 @@ export interface ChatOptions {
 // 流式事件类型
 export type StreamEvent =
   | { type: 'text'; text: string }
+  | { type: 'thinking'; text: string }
   | { type: 'tool_use'; id: string; name: string; input: unknown }
   | { type: 'done'; message: unknown };
 

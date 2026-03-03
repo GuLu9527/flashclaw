@@ -31,6 +31,7 @@ export interface ChatParams {
   platform?: string;
   onToken?: (chunk: string) => void;
   onToolUse?: (name: string, input: unknown) => void;
+  onThinking?: (text: string) => void;
 }
 
 export interface ChatResult {
@@ -64,6 +65,7 @@ interface CoreDependencies {
     platform?: string;
     onToken?: (chunk: string) => void;
     onToolUse?: (name: string, input: unknown) => void;
+    onThinking?: (text: string) => void;
   }) => Promise<{ result: string | null; metrics?: AgentRunMetrics }>;
   getRegisteredGroups: () => Record<string, RegisteredGroup>;
   getSessions: () => Record<string, string>;
@@ -300,6 +302,7 @@ export async function chat(params: ChatParams): Promise<ChatResult> {
     platform: params.platform || 'cli',
     onToken: params.onToken,
     onToolUse: params.onToolUse,
+    onThinking: params.onThinking,
   });
 
   return {

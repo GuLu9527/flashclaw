@@ -136,6 +136,9 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
           onToolUse: (name: string, input: unknown) => {
             res.write(`[TOOL:${JSON.stringify({ name, input })}]`);
           },
+          onThinking: (text: string) => {
+            res.write(`[THINKING:${text}]`);
+          },
         });
 
         // 发送 metrics
