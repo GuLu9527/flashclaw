@@ -230,8 +230,9 @@ const plugin: ChannelPlugin = {
   },
 
   async sendMessage(_chatId: string, _content: string): Promise<SendMessageResult> {
-    // CLI 渠道的消息通过 HTTP 流式响应直接返回，不需要主动推送
-    return { success: true };
+    // CLI 渠道的消息通过 HTTP 流式响应直接返回，不支持主动推送
+    // 返回 false 防止调度器等场景误判消息已送达
+    return { success: false, error: 'CLI 渠道不支持主动推送消息' };
   }
 };
 

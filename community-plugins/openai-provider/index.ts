@@ -26,7 +26,67 @@ const MAX_TOOL_CALL_DEPTH = 20;
 const MAX_TOOL_RESULT_CHARS = 4000;
 const KEEP_RECENT_TOOL_ROUNDS = 2;
 
+// 匹配 <tool_call>...</tool_call> 标签（MLX server / 本地模型的 tool call 格式）
+const TOOL_CALL_TAG_RE = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g;
+// 匹配 <think>...</think> 标签
+const THINK_TAG_RE = /<think>[\s\S]*?<\/think>/g;
+
 // ==================== 工具函数 ====================
+
+/**
+ * 从文本内容中解析 <tool_call> 标签（兼容 MLX server 等不返回标准 tool_calls 字段的后端）
+ */
+function parseToolCallsFromContent(
+  content: string
+): Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }> {
+  const results: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }> = [];
+  let match: RegExpExecArray | null;
+  const re = new RegExp(TOOL_CALL_TAG_RE.source, 'g');
+  while ((match = re.exec(content)) !== null) {
+    try {
+      const parsed = JSON.parse(match[1]);
+      if (parsed.name) {
+        results.push({
+          id: `tool-${Date.now()}-${results.length}`,
+          type: 'function',
+          function: {
+            name: parsed.name,
+            arguments: typeof parsed.arguments === 'string'
+              ? parsed.arguments
+              : JSON.stringify(parsed.arguments ?? {}),
+          },
+        });
+      }
+    } catch {
+      // JSON 解析失败，跳过
+    }
+  }
+  return results;
+}
+
+/**
+ * 清理模型输出中的 <think> 和 <tool_call> 标签，返回纯文本
+ */
+function cleanModelOutput(content: string): string {
+  return content
+    .replace(THINK_TAG_RE, '')
+    .replace(TOOL_CALL_TAG_RE, '')
+    .trim();
+}
+
+/**
+ * 检测字符串末尾是否有不完整的标签前缀
+ * 返回匹配的部分长度（0 表示无匹配）
+ * 例如：findPartialTag("hello<thi", "<think>") → 4（匹配 "<thi"）
+ */
+function findPartialTag(text: string, tag: string): number {
+  for (let len = Math.min(tag.length - 1, text.length); len > 0; len--) {
+    if (text.endsWith(tag.substring(0, len))) {
+      return len;
+    }
+  }
+  return 0;
+}
 
 function truncateToolResult(content: string, maxChars: number): string {
   if (content.length <= maxChars) return content;
@@ -85,7 +145,10 @@ function convertMessages(messages: ChatMessage[]): OpenAI.Chat.ChatMessage[] {
 function buildChatMessages(messages: ChatMessage[], system?: string): OpenAI.Chat.ChatMessage[] {
   const chatMessages: OpenAI.Chat.ChatMessage[] = [];
   if (system) {
-    chatMessages.push({ role: 'system', content: system });
+    // 本地模型注入 /no_think 指令，防止 Qwen3 等模型陷入思考而不执行工具
+    const isLocal = shouldUseOllamaExtraBody(baseURL);
+    const systemContent = isLocal ? `/no_think\n${system}` : system;
+    chatMessages.push({ role: 'system', content: systemContent });
   }
   chatMessages.push(...convertMessages(messages));
   return chatMessages;
@@ -223,6 +286,12 @@ const openaiProvider: AIProviderPlugin = {
     // 收集完整的 tool_calls 数据（流式 delta 需要逐步拼装）
     const collectedToolCalls: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }> = [];
 
+    // 流式标签状态机（兼容 MLX server 等将思考/工具调用放在 content 中的后端）
+    let tagState: 'normal' | 'think' | 'tool_call' = 'normal';
+    // 部分标签缓冲（处理标签被拆分到多个 chunk 的边界情况）
+    let tagBuffer = '';
+    // <tool_call> 内容保留在 finalContent 中（供正则解析），但不 yield 给 CLI
+
     for await (const chunk of stream) {
       const choice = chunk.choices[0];
       const delta = choice?.delta;
@@ -241,8 +310,89 @@ const openaiProvider: AIProviderPlugin = {
       }
 
       if (delta?.content) {
-        finalContent += delta.content;
-        yield { type: 'text', text: delta.content };
+        // 处理 <think> 和 <tool_call> 标签：拦截并分流
+        let remaining = tagBuffer + delta.content;
+        tagBuffer = '';
+
+        while (remaining.length > 0) {
+          if (tagState === 'think') {
+            const endIdx = remaining.indexOf('</think>');
+            if (endIdx !== -1) {
+              const thinkText = remaining.substring(0, endIdx);
+              if (thinkText) yield { type: 'thinking', text: thinkText };
+              tagState = 'normal';
+              remaining = remaining.substring(endIdx + '</think>'.length);
+            } else {
+              const partial = findPartialTag(remaining, '</think>');
+              if (partial > 0) {
+                const thinkText = remaining.substring(0, remaining.length - partial);
+                if (thinkText) yield { type: 'thinking', text: thinkText };
+                tagBuffer = remaining.substring(remaining.length - partial);
+              } else {
+                yield { type: 'thinking', text: remaining };
+              }
+              remaining = '';
+            }
+          } else if (tagState === 'tool_call') {
+            const endIdx = remaining.indexOf('</tool_call>');
+            if (endIdx !== -1) {
+              // 内容加入 finalContent（含标签，用于后续解析），但不 yield 给 CLI
+              finalContent += remaining.substring(0, endIdx) + '</tool_call>';
+              tagState = 'normal';
+              remaining = remaining.substring(endIdx + '</tool_call>'.length);
+            } else {
+              const partial = findPartialTag(remaining, '</tool_call>');
+              if (partial > 0) {
+                finalContent += remaining.substring(0, remaining.length - partial);
+                tagBuffer = remaining.substring(remaining.length - partial);
+              } else {
+                finalContent += remaining;
+              }
+              remaining = '';
+            }
+          } else {
+            // normal 状态：查找最近的 <think> 或 <tool_call> 标签
+            const thinkIdx = remaining.indexOf('<think>');
+            const toolIdx = remaining.indexOf('<tool_call>');
+            // 找最近的标签
+            let nearestTag: 'think' | 'tool_call' | null = null;
+            let nearestIdx = remaining.length;
+            if (thinkIdx !== -1 && thinkIdx < nearestIdx) { nearestIdx = thinkIdx; nearestTag = 'think'; }
+            if (toolIdx !== -1 && toolIdx < nearestIdx) { nearestIdx = toolIdx; nearestTag = 'tool_call'; }
+
+            if (nearestTag) {
+              const textBefore = remaining.substring(0, nearestIdx);
+              if (textBefore) {
+                finalContent += textBefore;
+                yield { type: 'text', text: textBefore };
+              }
+              const tagLen = nearestTag === 'think' ? '<think>'.length : '<tool_call>'.length;
+              // tool_call 开标签写入 finalContent（供后续正则解析），但不 yield 给 CLI
+              if (nearestTag === 'tool_call') {
+                finalContent += '<tool_call>';
+              }
+              tagState = nearestTag;
+              remaining = remaining.substring(nearestIdx + tagLen);
+            } else {
+              // 检查末尾是否有不完整的标签
+              const partialThink = findPartialTag(remaining, '<think>');
+              const partialTool = findPartialTag(remaining, '<tool_call>');
+              const partial = Math.max(partialThink, partialTool);
+              if (partial > 0) {
+                const text = remaining.substring(0, remaining.length - partial);
+                if (text) {
+                  finalContent += text;
+                  yield { type: 'text', text: text };
+                }
+                tagBuffer = remaining.substring(remaining.length - partial);
+              } else {
+                finalContent += remaining;
+                yield { type: 'text', text: remaining };
+              }
+              remaining = '';
+            }
+          }
+        }
       }
 
       if (delta?.tool_calls && delta.tool_calls.length > 0) {
@@ -272,6 +422,18 @@ const openaiProvider: AIProviderPlugin = {
         finishReason = choice.finish_reason;
       }
     }
+
+    // 兼容 MLX server：如果标准 tool_calls 为空，从 finalContent 中解析 <tool_call> 标签
+    if (collectedToolCalls.length === 0 && finalContent.includes('<tool_call>')) {
+      const parsed = parseToolCallsFromContent(finalContent);
+      collectedToolCalls.push(...parsed);
+      if (parsed.length > 0) {
+        finishReason = 'tool_calls';
+      }
+    }
+
+    // 清理 content 中残留的 <think> 和 <tool_call> 标签
+    finalContent = cleanModelOutput(finalContent);
 
     // 流结束后，发送完整的 tool_use 事件（arguments 已完整拼装）
     for (const tc of collectedToolCalls) {
@@ -313,43 +475,41 @@ const openaiProvider: AIProviderPlugin = {
       return message?.content || '';
     }
 
-    // 添加助手消息（包含工具调用）
-    const assistantMsg: ChatMessage = {
-      role: 'assistant',
-      content: message.content || '',
-    };
-    messages.push(assistantMsg);
+    // 构建助手消息（包含工具调用信息）
+    const toolCallSummary = message.tool_calls.map((tc: { function: { name: string; arguments: string } }) => {
+      let args: unknown;
+      try { args = JSON.parse(tc.function.arguments || '{}'); } catch { args = {}; }
+      return `[调用工具 ${tc.function.name}(${JSON.stringify(args)})]`;
+    }).join('\n');
+    messages.push({ role: 'assistant', content: toolCallSummary });
 
     // 执行工具调用
     for (const tc of message.tool_calls) {
       heartbeat?.();
 
+      const tcTyped = tc as { function: { name: string; arguments: string } };
       let input: unknown;
       try {
-        input = JSON.parse(tc.function.arguments || '{}');
+        input = JSON.parse(tcTyped.function.arguments || '{}');
       } catch {
         input = {};
       }
 
+      let resultContent: string;
       try {
-        const result = await executeTool(tc.function.name, input);
-        const resultStr = typeof result === 'string'
-          ? result
-          : JSON.stringify(result);
-
-        // 添加工具结果消息
-        messages.push({
-          role: 'user',
-          content: truncateToolResult(resultStr, MAX_TOOL_RESULT_CHARS),
-        });
+        const result = await executeTool(tcTyped.function.name, input);
+        const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
+        resultContent = truncateToolResult(resultStr, MAX_TOOL_RESULT_CHARS);
       } catch (error) {
-        // 工具执行失败
         const errorMsg = error instanceof Error ? error.message : String(error);
-        messages.push({
-          role: 'user',
-          content: `[工具执行失败] ${errorMsg}`,
-        });
+        resultContent = `[工具执行失败] ${errorMsg}`;
       }
+
+      // 使用简洁的纯文本格式（对小模型更友好）
+      messages.push({
+        role: 'user',
+        content: `[工具 ${tcTyped.function.name} 执行结果]\n${resultContent}`,
+      });
 
       heartbeat?.();
     }

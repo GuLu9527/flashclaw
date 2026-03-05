@@ -1,7 +1,7 @@
 # FlashClaw 开发路线图
 
 > 当前版本: v1.7.1
-> 更新时间: 2026-03-03
+> 更新时间: 2026-03-04
 
 ---
 
@@ -55,6 +55,7 @@
 - [x] deepseek-provider - DeepSeek API 支持 (通过 openai-provider 配置 OPENAI_BASE_URL=https://api.deepseek.com/v1)
 - [x] siliconflow-provider - 硅基流动 API 支持 (通过 openai-provider 配置 OPENAI_BASE_URL=https://api.siliconflow.cn/v1)
 - [x] qianwen-provider - 通义千问 API 支持 (通过 openai-provider 配置 OPENAI_BASE_URL 需使用 DashScope)
+- [x] mlx-openai-server - Apple MLX 支持 (通过 openai-provider 配置 OPENAI_BASE_URL=http://localhost:8000/v1，增加 `<tool_call>` 标签解析 + `<think>` 流式拦截)
 
 ### 2. 小模型友好优化 — 不依赖模型能力
 
@@ -92,9 +93,18 @@
 ### 5. CLI REPL 增强
 - [x] 上下箭头历史浏览（cli-ink.tsx React + Ink）
 - [x] Tab 命令补全（cli-ink.tsx）
-- [x] Markdown 渲染（cli-ink.tsx）
+- [~] Markdown 渲染（cli-ink.tsx）— 仅支持标题/引用/列表，缺失代码块/行内代码/加粗/斜体/链接
 - [x] 模型思考过程显示（Ctrl+T 折叠/展开）
 - [ ] 语音输入（macOS say）
+
+#### CLI Bug 修复清单（2026-03-04 Review）
+
+| 优先级 | 问题 | 根因 | 位置 | 状态 |
+|--------|------|------|------|------|
+| P0 | **Markdown 代码块未渲染** — `renderMarkdownLine` 只处理单行标记，完全缺失 ` ``` ` 代码块、行内代码 `` `code` ``、加粗 `**bold**`、斜体 `*italic*` | `renderMarkdownLine` 无代码块状态机，调用方也未维护多行状态 | `cli-ink.tsx:69-82`, `cli-ink.tsx:169-177` | 待修复 |
+| P0 | **二次对话不显示「接收中」Spinner** — 第二次发消息时 `receivedThinking` 仍为上次对话的 `true`，导致 `busy && !receivedThinking` 始终为 `false` | `setReceivedThinking(false)` 在 `fetch` 之后（行 427），应移到 `setBusy(true)` 之后、`fetch` 之前 | `cli-ink.tsx:409,427,565` | 待修复 |
+| P1 | **小模型 /no_think 下仍显示「思考中」** — Qwen3 `/no_think` 模式仍输出空 `<think>\n\n</think>`，状态机 yield 了空白 thinking 事件 | openai-provider 状态机 yield thinking 前未过滤纯空白内容 | `openai-provider/index.ts` 状态机 think 分支 | 待修复 |
+| P1 | **思考中括号内显示字数而非 token 数** — `msg.content.length` 是字符数，应改为 CJK/英文分段估算 token 数 | 直接用 `.length` 字符计数 | `cli-ink.tsx:127` | 待修复 |
 
 ### 6. 每日/每周报告
 - [ ] daily-report 工具插件
@@ -197,9 +207,9 @@
 | 优先级 | 问题 | 位置 | 状态 |
 |--------|------|------|------|
 | P0 | 工具调用重复 API 请求 — 流式检测到 `tool_use` 后又发一次 `chat()` 非流式请求，浪费 token | `agent-runner.ts:720-731` | ✅ 已修复 |
-| P0 | 默认模型 ID 不一致 — `getCurrentModelId()` 默认 `claude-4-5-sonnet-20250929`，`config.ts` 默认 `claude-sonnet-4-20250514` | `model-capabilities.ts:128` vs `config.ts:24` | 待修复 |
-| P0 | 上下文阈值无效 — `CONTEXT_MIN_TOKENS` 和 `CONTEXT_WARN_TOKENS` 默认都是 16000，warning 永远不会单独触发 | `context-guard.ts:17-19` | 待修复 |
-| P0 | 任务超时 Promise 泄漏 — `setTimeout` ID 未保存，任务正常完成后定时器仍存在 | `task-scheduler.ts:236-239` | 待修复 |
+| P0 | 默认模型 ID 不一致 — `getCurrentModelId()` 默认 `claude-4-5-sonnet-20250929`，`config.ts` 默认 `claude-sonnet-4-20250514` | `model-capabilities.ts:128` vs `config.ts:24` | ✅ 已修复 |
+| P0 | 上下文阈值无效 — `CONTEXT_MIN_TOKENS` 和 `CONTEXT_WARN_TOKENS` 默认都是 16000，warning 永远不会单独触发 | `context-guard.ts:17-19` | ✅ 已修复 |
+| P0 | 任务超时 Promise 泄漏 — `setTimeout` ID 未保存，任务正常完成后定时器仍存在 | `task-scheduler.ts:236-239` | ✅ 已修复 |
 
 ### 🟡 P1 — 设计 / 性能 / 安全
 
@@ -220,6 +230,30 @@
 | P2 | `getPlatformDisplayName` 硬编码不完整 — 只有飞书有中文名 | `channel-manager.ts:128-133` | 建议 |
 | P2 | `errors.ts` 自定义错误类未被充分使用 — 核心代码几乎全用 `new Error()` | 多处 | 建议 |
 | P2 | 测试补充 — anthropic-provider mock 测试、channel-manager 多渠道回退、IPC Schema 边界测试 | `tests/` | 建议 |
+
+## 代码审查摘要 (2026-03-04)
+
+### 🔴 P0 — 运行时消息路由风险
+
+| 优先级 | 问题 | 位置 | 状态 |
+|--------|------|------|------|
+| P0 | 多渠道回退可能吞消息 — 指定 `platform` 未命中时会回退到“任意渠道”；`cli-channel.sendMessage()` 无实际投递但返回 success，可能导致消息被错误判定为已发送（定时任务/IPC 无平台时风险更高） | `src/channel-manager.ts:33-45`, `plugins/cli-channel/index.ts:232-234`, `src/index.ts:1356`, `src/task-scheduler.ts:49` | ✅ 已修复 |
+
+### 🟡 P1 — 测试回归 / 契约不一致
+
+| 优先级 | 问题 | 位置 | 状态 |
+|--------|------|------|------|
+| P1 | E2E 用例超时 — 测试插件上报 `platform: "e2e"`，但插件名是 `e2e-channel`，导致回复路由不稳定并触发超时 | `tests/e2e.test.ts:127`, `tests/e2e.test.ts:226-233` | ✅ 已修复 |
+| P1 | browser-control 截图返回契约与测试不一致 — 插件不再返回 `base64` 字段，但测试仍强依赖 `result.data.base64` | `community-plugins/browser-control/index.ts:546-554`, `tests/plugins/browser-control.test.ts:247` | ✅ 已修复 |
+| P1 | `send-message` 仍可读取任意本地路径作为图片输入，存在文件泄露风险 | `plugins/send-message/index.ts:106-110` | ✅ 已修复 |
+
+### 🟢 P2 — 本次复查项（已全部修复）
+
+| 优先级 | 问题 | 位置 | 状态 |
+|--------|------|------|------|
+| P2 | 任务超时 Promise 泄漏 — `setTimeout` ID 未保存，任务正常完成后定时器仍会触发 | `src/task-scheduler.ts:236-239` | ✅ 已修复 |
+| P2 | 默认模型 ID 不一致 — `model-capabilities` 与 `config` 默认模型不同 | `src/core/model-capabilities.ts:128`, `src/config.ts:24` | ✅ 已修复 |
+| P2 | 上下文 warning 阈值与拒绝阈值相同，warning 分支无法单独生效 | `src/core/context-guard.ts:17-19` | ✅ 已修复 |
 
 ### ✅ 亮点
 

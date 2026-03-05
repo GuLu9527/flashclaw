@@ -232,9 +232,10 @@ async function runTaskWithTimeout(
   const startTime = Date.now();
   const timeoutMs = task.timeout_ms || DEFAULT_TASK_TIMEOUT_MS;
 
-  // 创建超时 Promise
+  // 创建超时 Promise（保存 timer ID 以便清理）
+  let timeoutId: NodeJS.Timeout;
   const timeoutPromise = new Promise<never>((_, reject) => {
-    setTimeout(() => {
+    timeoutId = setTimeout(() => {
       reject(new Error(`任务执行超时 (${timeoutMs}ms)`));
     }, timeoutMs);
   });
@@ -257,6 +258,8 @@ async function runTaskWithTimeout(
       error: err instanceof Error ? err.message : String(err),
       durationMs: Date.now() - startTime
     };
+  } finally {
+    clearTimeout(timeoutId!);
   }
 }
 

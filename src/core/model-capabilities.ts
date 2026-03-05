@@ -3,6 +3,8 @@
  * 参考 openclaw 的 model-catalog.ts 设计
  */
 
+import { DEFAULT_AI_MODEL } from '../config.js';
+
 /**
  * 模型能力定义
  */
@@ -125,7 +127,7 @@ export function getModelContextWindow(modelId: string): number {
  * 支持多种环境变量名（兼容不同配置）
  */
 export function getCurrentModelId(): string {
-  return process.env.AI_MODEL || process.env.ANTHROPIC_MODEL || 'claude-4-5-sonnet-20250929';
+  return process.env.AI_MODEL || process.env.ANTHROPIC_MODEL || DEFAULT_AI_MODEL;
 }
 
 /**

@@ -31,20 +31,25 @@ export class ChannelManager {
   }
   
   async sendMessage(chatId: string, content: string, platform?: string): Promise<SendMessageResult> {
-    // 如果指定了平台，使用指定的渠道
+    // 如果指定了平台，仅使用该渠道（不回退，防止消息误投递）
     if (platform) {
       const channel = this.channels.find(c => c.name === platform);
-      if (channel) {
-        return await channel.sendMessage(chatId, content);
+      if (!channel) {
+        logger.warn({ platform, chatId }, '指定的渠道不存在，消息未发送');
+        return { success: false, error: `渠道 ${platform} 不存在` };
       }
+      return await channel.sendMessage(chatId, content);
     }
-    // 否则尝试所有渠道
+    // 未指定平台时尝试所有渠道（跳过返回 success:false 或抛异常的渠道）
     for (const channel of this.channels) {
       try {
-        return await channel.sendMessage(chatId, content);
+        const result = await channel.sendMessage(chatId, content);
+        if (result.success) {
+          return result;
+        }
+        logger.debug({ channel: channel.name, chatId, error: result.error }, '渠道发送消息未成功，尝试下一个');
       } catch (err) {
-        logger.debug({ channel: channel.name, chatId, err }, '渠道发送消息失败，尝试下一个');
-        continue;
+        logger.debug({ channel: channel.name, chatId, err }, '渠道发送消息异常，尝试下一个');
       }
     }
     return { success: false, error: `无法发送消息到 ${chatId}` };
