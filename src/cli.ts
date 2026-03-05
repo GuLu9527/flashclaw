@@ -458,25 +458,45 @@ async function startService(): Promise<void> {
 }
 
 // ==================== 参数解析 ====================
-function parseArgs(): { command: string; subcommand?: string; args: string[]; flags: Record<string, boolean> } {
+function parseArgs(): {
+  command: string;
+  subcommand?: string;
+  args: string[];
+  flags: Record<string, string | boolean>;
+} {
   const args = process.argv.slice(2);
-  const flags: Record<string, boolean> = {};
+  const flags: Record<string, string | boolean> = {};
   const positional: string[] = [];
-  
-  for (const arg of args) {
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+
     if (arg.startsWith('--')) {
-      flags[arg.slice(2)] = true;
-    } else if (arg.startsWith('-')) {
-      flags[arg.slice(1)] = true;
-    } else {
-      positional.push(arg);
+      const raw = arg.slice(2);
+      if (raw.includes('=')) {
+        const [key, ...rest] = raw.split('=');
+        flags[key] = rest.join('=');
+      } else if (i + 1 < args.length && !args[i + 1].startsWith('-')) {
+        flags[raw] = args[i + 1];
+        i++;
+      } else {
+        flags[raw] = true;
+      }
+      continue;
     }
+
+    if (arg.startsWith('-') && arg.length > 1) {
+      flags[arg.slice(1)] = true;
+      continue;
+    }
+
+    positional.push(arg);
   }
-  
+
   const command = positional[0] || '';
   const subcommand = positional[1];
   const restArgs = positional.slice(2);
-  
+
   return { command, subcommand, args: restArgs, flags };
 }
 
@@ -506,22 +526,7 @@ async function main(): Promise<void> {
     case 'init': {
       // 交互式初始化向导
       const { initCommand } = await import('./commands/init.js');
-      // 将 flags 转换为支持字符串值（处理 --api-key=xxx 形式的参数）
       const initFlags: Record<string, string | boolean> = { ...flags };
-      // 从原始 argv 中提取 --api-key, --base-url, --model, --bot-name 的值
-      const rawArgs = process.argv.slice(2);
-      for (let i = 0; i < rawArgs.length; i++) {
-        const arg = rawArgs[i];
-        if (arg.includes('=')) {
-          const [key, ...rest] = arg.replace(/^--/, '').split('=');
-          initFlags[key] = rest.join('=');
-        } else if (arg.startsWith('--') && i + 1 < rawArgs.length && !rawArgs[i + 1].startsWith('-')) {
-          const key = arg.slice(2);
-          if (['api-key', 'base-url', 'model', 'bot-name'].includes(key)) {
-            initFlags[key] = rawArgs[i + 1];
-          }
-        }
-      }
       await initCommand(initFlags);
       break;
     }
@@ -651,7 +656,7 @@ async function handleConfigCommand(
 async function handlePluginsCommand(
   subcommand: string | undefined,
   args: string[],
-  flags: Record<string, boolean>
+  flags: Record<string, string | boolean>
 ): Promise<void> {
   switch (subcommand) {
     case 'list':

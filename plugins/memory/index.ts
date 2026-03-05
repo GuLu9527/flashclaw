@@ -5,8 +5,6 @@
 
 import { ToolPlugin, ToolContext, ToolResult } from '../../src/plugins/types.js';
 import { getMemoryManager } from '../../src/core/memory.js';
-import * as fs from 'node:fs';
-import * as path from 'node:path';
 
 /**
  * 记忆操作参数
@@ -18,8 +16,8 @@ interface MemoryParams {
   key?: string;
   /** 记忆值（remember 必需）/ 日志内容（log 必需） */
   value?: string;
-  /** 作用域：user（用户级别，跨会话共享）或 group（会话级别，默认） */
-  scope?: 'user' | 'group';
+  /** 作用域：user（用户级别）或 global（全局共享，默认） */
+  scope?: 'user' | 'global';
 }
 
 const plugin: ToolPlugin = {
@@ -57,8 +55,8 @@ const plugin: ToolPlugin = {
         },
         scope: {
           type: 'string',
-          enum: ['user', 'group'],
-          description: '作用域。user=用户级别（跨会话共享，适合个人偏好），group=会话级别（默认）'
+          enum: ['user', 'global'],
+          description: '作用域。user=用户级别（适合个人偏好），global=全局级别（跨渠道共享，默认）'
         }
       },
       required: ['action']
@@ -66,12 +64,11 @@ const plugin: ToolPlugin = {
   },
   
   async execute(params: unknown, context: ToolContext): Promise<ToolResult> {
-    const { action, key, value, scope = 'group' } = params as MemoryParams;
+    const { action, key, value, scope = 'global' } = params as MemoryParams;
     const mm = getMemoryManager();
-    
-    // 默认使用会话级别记忆（仅当前会话有效）
+
     const isUserScope = scope === 'user';
-    const scopeLabel = isUserScope ? '用户' : '会话';
+    const scopeLabel = isUserScope ? '用户' : '全局';
     
     if (action === 'remember') {
       // 记住信息
@@ -93,7 +90,7 @@ const plugin: ToolPlugin = {
         if (isUserScope) {
           mm.rememberUser(context.userId, key, value);
         } else {
-          mm.remember(context.groupId, key, value);
+          mm.remember(key, value);
         }
         return {
           success: true,
@@ -116,15 +113,15 @@ const plugin: ToolPlugin = {
     if (action === 'recall') {
       // 回忆信息
       try {
-        // 默认同时查询用户级别和会话级别记忆
+        // 默认同时查询用户级别和全局级别记忆
         const userResult = mm.recallUser(context.userId, key);
-        const groupResult = mm.recall(context.groupId, key);
-        
+        const globalResult = mm.recall(key);
+
         if (key) {
-          // 回忆特定键 - 优先返回用户级别，其次会话级别
-          const result = userResult || groupResult;
-          const foundScope = userResult ? '用户' : (groupResult ? '会话' : null);
-          
+          // 回忆特定键 - 优先返回用户级别，其次全局级别
+          const result = userResult || globalResult;
+          const foundScope = userResult ? '用户' : (globalResult ? '全局' : null);
+
           if (result) {
             return {
               success: true,
@@ -147,15 +144,15 @@ const plugin: ToolPlugin = {
             };
           }
         } else {
-          // 回忆所有 - 合并用户级别和会话级别
+          // 回忆所有 - 合并用户级别和全局级别
           const memories: string[] = [];
           if (userResult) {
             memories.push(`【用户记忆】\n${userResult}`);
           }
-          if (groupResult) {
-            memories.push(`【会话记忆】\n${groupResult}`);
+          if (globalResult) {
+            memories.push(`【全局记忆】\n${globalResult}`);
           }
-          
+
           if (memories.length > 0) {
             return {
               success: true,
@@ -191,35 +188,17 @@ const plugin: ToolPlugin = {
           error: 'log 操作需要提供 value（日志内容）'
         };
       }
-      
+
       try {
-        const mm = getMemoryManager();
-        const memoryDir = (mm as unknown as { config: { memoryDir: string } }).config.memoryDir;
-        const logsDir = path.join(memoryDir, 'daily');
-        if (!fs.existsSync(logsDir)) {
-          fs.mkdirSync(logsDir, { recursive: true });
-        }
-        
-        const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
-        const logFile = path.join(logsDir, `${today}.md`);
-        const time = new Date().toLocaleTimeString('zh-CN', { hour12: false });
-        const entry = `- [${time}] ${value}\n`;
-        
-        // 如果文件不存在，添加标题
-        if (!fs.existsSync(logFile)) {
-          fs.writeFileSync(logFile, `# ${today} 日志\n\n${entry}`, 'utf-8');
-        } else {
-          fs.appendFileSync(logFile, entry, 'utf-8');
-        }
-        
+        const log = mm.appendDailyLog(value);
         return {
           success: true,
           data: {
             action: 'logged',
-            date: today,
-            time,
+            date: log.date,
+            time: log.time,
             content: value,
-            message: `已记录到 ${today} 日志`
+            message: `已记录到 ${log.date} 日志`
           }
         };
       } catch (error) {

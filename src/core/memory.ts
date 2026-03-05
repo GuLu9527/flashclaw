@@ -105,6 +105,12 @@ export interface CompactResult {
   savedTokens: number;
 }
 
+export interface DailyLogAppendResult {
+  date: string;
+  time: string;
+  filePath: string;
+}
+
 // ==================== 记忆管理器实现 ====================
 
 /**
@@ -125,11 +131,11 @@ export interface CompactResult {
  * // 获取上下文
  * const context = memory.getContext('group1');
  * 
- * // 记住重要信息
- * memory.remember('group1', 'user_name', '张三');
- * 
+ * // 记住重要信息（全局共享）
+ * memory.remember('user_name', '张三');
+ *
  * // 回忆信息
- * const name = memory.recall('group1', 'user_name');
+ * const name = memory.recall('user_name');
  * ```
  */
 export class MemoryManager {
@@ -138,15 +144,21 @@ export class MemoryManager {
   /** 短期记忆存储：groupId -> 消息列表 */
   private shortTermMemory: Map<string, ChatMessage[]> = new Map();
   
-  /** 长期记忆缓存：groupId -> 记忆条目映射 */
-  private longTermCache: Map<string, Map<string, MemoryEntry>> = new Map();
+  /** 全局长期记忆缓存（跨渠道共享） */
+  private globalMemoryCache: Map<string, MemoryEntry> | null = null;
   
   /** 用户级别记忆缓存：userId -> 记忆条目映射 */
   private userMemoryCache: Map<string, Map<string, MemoryEntry>> = new Map();
   
   /** 压缩摘要缓存：groupId -> 摘要 */
   private summaryCache: Map<string, string> = new Map();
-  
+
+  /** 每日日志缓存 */
+  private dailyLogsCache: {
+    content: string;
+    fileStats: Record<string, number>;
+  } | null = null;
+
   /** 正在压缩的 groupId 集合（防止并发压缩） */
   private compactingGroups: Set<string> = new Set();
   
@@ -302,16 +314,6 @@ export class MemoryManager {
       logger.debug({ evicted: toRemove }, '清理不活跃的短期记忆');
     }
     
-    // 清理长期记忆缓存
-    if (this.longTermCache.size > maxEntries) {
-      const toRemove = this.longTermCache.size - maxEntries;
-      const keys = this.longTermCache.keys();
-      for (let i = 0; i < toRemove; i++) {
-        const key = keys.next().value;
-        if (key !== undefined) this.longTermCache.delete(key);
-      }
-    }
-    
     // 清理用户记忆缓存
     if (this.userMemoryCache.size > maxEntries) {
       const toRemove = this.userMemoryCache.size - maxEntries;
@@ -326,21 +328,17 @@ export class MemoryManager {
   // ==================== 长期记忆 ====================
   
   /**
-   * 记住重要信息（持久化到文件）
-   * 
-   * @param groupId - 群组 ID
+   * 记住重要信息（全局长期记忆，跨渠道共享）
+   *
    * @param key - 记忆键
    * @param value - 记忆值
    */
-  remember(groupId: string, key: string, value: string): void {
-    // 确保缓存存在
-    if (!this.longTermCache.has(groupId)) {
-      this.loadLongTermMemory(groupId);
-    }
-    
-    const cache = this.longTermCache.get(groupId)!;
+  remember(key: string, value: string): void {
+    this.loadGlobalMemory();
+
+    const cache = this.globalMemoryCache!;
     const now = new Date().toISOString();
-    
+
     const existing = cache.get(key);
     const entry: MemoryEntry = {
       key,
@@ -348,73 +346,54 @@ export class MemoryManager {
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     };
-    
+
     cache.set(key, entry);
-    
-    // 保存到文件
-    this.saveLongTermMemory(groupId);
+    this.saveGlobalMemory();
   }
-  
+
   /**
-   * 回忆信息
-   * 
-   * @param groupId - 群组 ID
+   * 回忆全局长期记忆
+   *
    * @param key - 记忆键（可选，不提供则返回所有记忆）
-   * @returns 记忆值或格式化的所有记忆
    */
-  recall(groupId: string, key?: string): string {
-    // 确保缓存存在
-    if (!this.longTermCache.has(groupId)) {
-      this.loadLongTermMemory(groupId);
-    }
-    
-    const cache = this.longTermCache.get(groupId)!;
-    
+  recall(key?: string): string {
+    this.loadGlobalMemory();
+
+    const cache = this.globalMemoryCache!;
+
     if (key) {
       return cache.get(key)?.value ?? '';
     }
-    
-    // 返回所有记忆的格式化文本
+
     if (cache.size === 0) {
       return '';
     }
-    
+
     const lines: string[] = [];
     for (const [k, entry] of cache) {
       lines.push(`- ${k}: ${entry.value}`);
     }
     return lines.join('\n');
   }
-  
+
   /**
-   * 删除记忆
-   * 
-   * @param groupId - 群组 ID
-   * @param key - 记忆键
+   * 删除全局记忆
    */
-  forget(groupId: string, key: string): void {
-    if (!this.longTermCache.has(groupId)) {
-      this.loadLongTermMemory(groupId);
-    }
-    
-    const cache = this.longTermCache.get(groupId)!;
+  forget(key: string): void {
+    this.loadGlobalMemory();
+
+    const cache = this.globalMemoryCache!;
     if (cache.delete(key)) {
-      this.saveLongTermMemory(groupId);
+      this.saveGlobalMemory();
     }
   }
-  
+
   /**
-   * 获取所有记忆键
-   * 
-   * @param groupId - 群组 ID
-   * @returns 记忆键列表
+   * 获取全局记忆键列表
    */
-  getMemoryKeys(groupId: string): string[] {
-    if (!this.longTermCache.has(groupId)) {
-      this.loadLongTermMemory(groupId);
-    }
-    
-    return Array.from(this.longTermCache.get(groupId)!.keys());
+  getMemoryKeys(): string[] {
+    this.loadGlobalMemory();
+    return Array.from(this.globalMemoryCache!.keys());
   }
   
   // ==================== 用户级别记忆 ====================
@@ -521,24 +500,17 @@ export class MemoryManager {
   }
   
   /**
-   * 保存用户级别记忆
+   * 保存用户级别记忆（原子写入）
    */
   private saveUserMemory(userId: string): void {
     const cache = this.userMemoryCache.get(userId);
     if (!cache) return;
-    
+
     const filePath = this.getUserMemoryFilePath(userId);
-    
-    // 确保目录存在
-    const dir = path.dirname(filePath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    
     const content = this.formatMemoryFile(`用户 ${userId}`, cache);
-    
+
     try {
-      fs.writeFileSync(filePath, content, 'utf-8');
+      this.atomicWriteFile(filePath, content);
     } catch (error) {
       logger.error({ path: filePath, error }, '保存用户记忆文件失败');
     }
@@ -741,7 +713,7 @@ export class MemoryManager {
       .join('\n\n');
 
     // 获取当前已有的长期记忆（避免重复提取）
-    const existingMemories = this.recall(groupId);
+    const existingMemories = this.recall();
 
     const response = await client.chat(
       [
@@ -789,7 +761,7 @@ ${conversationText}
         const key = match[1].trim().replace(/^[-*•]\s*/, ''); // 去除列表符号
         const value = match[2].trim();
         if (key && value) {
-          this.remember(groupId, key, value);
+          this.remember(key, value);
           savedCount++;
         }
       }
@@ -855,49 +827,83 @@ ${conversationText}
   
   /**
    * 构建包含长期记忆的系统提示词
-   * 
-   * @param groupId - 群组 ID
+   *
+   * @param groupId - 群组 ID（用于读取该会话摘要）
+   * @param userId - 用户 ID（用于注入用户级别记忆）
    * @param basePrompt - 基础系统提示词
    * @returns 完整的系统提示词
    */
-  buildSystemPrompt(groupId: string, basePrompt?: string): string {
+  buildSystemPrompt(groupId: string, userId: string, basePrompt?: string): string {
     const parts: string[] = [];
-    
-    // 基础提示词
+
     if (basePrompt) {
       parts.push(basePrompt);
     }
-    
-    // 添加压缩摘要（如果有）
+
     const summary = this.getSummary(groupId);
     if (summary) {
       parts.push(`\n## 之前对话的摘要\n${summary}`);
     }
-    
-    // 添加长期记忆
-    const memories = this.recall(groupId);
-    if (memories) {
-      parts.push(`\n## 关于这个群组/用户的记忆\n${memories}`);
+
+    const globalMemories = this.recall();
+    if (globalMemories) {
+      parts.push(`\n## 全局长期记忆（跨渠道共享）\n${globalMemories}`);
     }
-    
-    // 添加近期每日日志（今天 + 昨天）
+
+    const userMemories = this.recallUser(userId);
+    if (userMemories) {
+      parts.push(`\n## 当前用户记忆\n${userMemories}`);
+    }
+
     const dailyLogs = this.loadRecentDailyLogs();
     if (dailyLogs) {
       parts.push(`\n## 近期日志\n${dailyLogs}`);
     }
-    
+
     return parts.join('\n\n');
   }
   
   /**
+   * 追加每日日志
+   */
+  appendDailyLog(content: string): DailyLogAppendResult {
+    const logsDir = path.join(this.config.memoryDir, 'daily');
+    const now = new Date();
+    const today = now.toISOString().split('T')[0];
+    const time = now.toLocaleTimeString('zh-CN', { hour12: false });
+    const logFile = path.join(logsDir, `${today}.md`);
+    const entry = `- [${time}] ${content}\n`;
+
+    if (!fs.existsSync(logsDir)) {
+      fs.mkdirSync(logsDir, { recursive: true });
+    }
+
+    if (!fs.existsSync(logFile)) {
+      this.atomicWriteFile(logFile, `# ${today} 日志\n\n${entry}`);
+    } else {
+      fs.appendFileSync(logFile, entry, 'utf-8');
+    }
+
+    // 日志有更新，清空缓存
+    this.dailyLogsCache = null;
+
+    return {
+      date: today,
+      time,
+      filePath: logFile,
+    };
+  }
+
+  /**
    * 加载近期每日日志（今天 + 昨天）
    * 参考 OpenClaw 的 memory/YYYY-MM-DD.md 设计
-   * 
+   *
    * @returns 日志内容，如果没有则返回空字符串
    */
   private loadRecentDailyLogs(): string {
     const dailyDir = path.join(this.config.memoryDir, 'daily');
     if (!fs.existsSync(dailyDir)) {
+      this.dailyLogsCache = { content: '', fileStats: {} };
       return '';
     }
 
@@ -910,22 +916,48 @@ ${conversationText}
       yesterday.toISOString().split('T')[0],
     ];
 
+    const stats: Record<string, number> = {};
     const logs: string[] = [];
+
     for (const date of dates) {
       const logFile = path.join(dailyDir, `${date}.md`);
-      if (fs.existsSync(logFile)) {
-        try {
-          const content = fs.readFileSync(logFile, 'utf-8').trim();
-          if (content) {
-            logs.push(content);
-          }
-        } catch {
-          // 读取失败，跳过
-        }
+      if (!fs.existsSync(logFile)) continue;
+
+      try {
+        const st = fs.statSync(logFile);
+        stats[logFile] = st.mtimeMs;
+      } catch {
+        stats[logFile] = -1;
       }
     }
 
-    return logs.join('\n\n');
+    const cache = this.dailyLogsCache;
+    if (cache) {
+      const cachedKeys = Object.keys(cache.fileStats).sort();
+      const currentKeys = Object.keys(stats).sort();
+      const sameKeys = cachedKeys.length === currentKeys.length && cachedKeys.every((k, i) => k === currentKeys[i]);
+      const sameMtime = sameKeys && currentKeys.every(k => cache.fileStats[k] === stats[k]);
+      if (sameMtime) {
+        return cache.content;
+      }
+    }
+
+    for (const date of dates) {
+      const logFile = path.join(dailyDir, `${date}.md`);
+      if (!fs.existsSync(logFile)) continue;
+      try {
+        const content = fs.readFileSync(logFile, 'utf-8').trim();
+        if (content) {
+          logs.push(content);
+        }
+      } catch {
+        // 读取失败，跳过
+      }
+    }
+
+    const merged = logs.join('\n\n');
+    this.dailyLogsCache = { content: merged, fileStats: stats };
+    return merged;
   }
 
   // ==================== 持久化 ====================
@@ -938,28 +970,44 @@ ${conversationText}
       fs.mkdirSync(this.config.memoryDir, { recursive: true });
     }
   }
-  
+
   /**
-   * 获取群组的记忆文件路径
+   * 原子写文件：先写 tmp 再 rename
    */
-  private getMemoryFilePath(groupId: string): string {
-    // 清理 groupId 中的特殊字符
-    const safeId = groupId.replace(/[^a-zA-Z0-9_-]/g, '_');
-    return path.join(this.config.memoryDir, `${safeId}.md`);
+  private atomicWriteFile(filePath: string, content: string): void {
+    const dir = path.dirname(filePath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+
+    const tmpPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
+    fs.writeFileSync(tmpPath, content, 'utf-8');
+    fs.renameSync(tmpPath, filePath);
   }
   
   /**
-   * 加载长期记忆
+   * 获取全局记忆文件路径
    */
-  private loadLongTermMemory(groupId: string): void {
+  private getGlobalMemoryFilePath(): string {
+    return path.join(this.config.memoryDir, 'global.md');
+  }
+
+  /**
+   * 加载全局长期记忆
+   */
+  private loadGlobalMemory(): void {
+    if (this.globalMemoryCache) {
+      return;
+    }
+
     const cache = new Map<string, MemoryEntry>();
-    this.longTermCache.set(groupId, cache);
-    
-    const filePath = this.getMemoryFilePath(groupId);
+    this.globalMemoryCache = cache;
+
+    const filePath = this.getGlobalMemoryFilePath();
     if (!fs.existsSync(filePath)) {
       return;
     }
-    
+
     try {
       const content = fs.readFileSync(filePath, 'utf-8');
       const entries = this.parseMemoryFile(content);
@@ -967,25 +1015,23 @@ ${conversationText}
         cache.set(entry.key, entry);
       }
     } catch (error) {
-      // 解析失败，使用空缓存
-      logger.error({ path: filePath, error }, '加载记忆文件失败');
+      logger.error({ path: filePath, error }, '加载全局记忆文件失败');
     }
   }
-  
+
   /**
-   * 保存长期记忆
+   * 保存全局长期记忆（原子写入）
    */
-  private saveLongTermMemory(groupId: string): void {
-    const cache = this.longTermCache.get(groupId);
-    if (!cache) return;
-    
-    const filePath = this.getMemoryFilePath(groupId);
-    const content = this.formatMemoryFile(groupId, cache);
-    
+  private saveGlobalMemory(): void {
+    if (!this.globalMemoryCache) return;
+
+    const filePath = this.getGlobalMemoryFilePath();
+    const content = this.formatMemoryFile('global', this.globalMemoryCache);
+
     try {
-      fs.writeFileSync(filePath, content, 'utf-8');
+      this.atomicWriteFile(filePath, content);
     } catch (error) {
-      logger.error({ path: filePath, error }, '保存记忆文件失败');
+      logger.error({ path: filePath, error }, '保存全局记忆文件失败');
     }
   }
   
@@ -994,23 +1040,21 @@ ${conversationText}
    */
   private parseMemoryFile(content: string): MemoryEntry[] {
     const entries: MemoryEntry[] = [];
-    
+
     // 解析 Markdown 格式的记忆条目
     // 格式：### key
     //       value
     //       <!-- created: ISO, updated: ISO -->
-    
+
     const lines = content.split('\n');
     let currentKey: string | null = null;
     let currentValue: string[] = [];
     let currentCreated = '';
     let currentUpdated = '';
-    
+
     for (const line of lines) {
-      // 检查是否是新的条目标题
       const keyMatch = line.match(/^### (.+)$/);
       if (keyMatch) {
-        // 保存之前的条目
         if (currentKey) {
           entries.push({
             key: currentKey,
@@ -1019,34 +1063,26 @@ ${conversationText}
             updatedAt: currentUpdated || new Date().toISOString(),
           });
         }
-        
+
         currentKey = keyMatch[1].trim();
         currentValue = [];
         currentCreated = '';
         currentUpdated = '';
         continue;
       }
-      
-      // 检查是否是元数据注释
+
       const metaMatch = line.match(/<!-- created: (.+), updated: (.+) -->/);
       if (metaMatch) {
         currentCreated = metaMatch[1];
         currentUpdated = metaMatch[2];
         continue;
       }
-      
-      // 跳过文件头
-      if (line.startsWith('# ') || line.startsWith('> ')) {
-        continue;
-      }
-      
-      // 添加到当前值
+
       if (currentKey) {
         currentValue.push(line);
       }
     }
-    
-    // 保存最后一个条目
+
     if (currentKey) {
       entries.push({
         key: currentKey,
@@ -1055,7 +1091,7 @@ ${conversationText}
         updatedAt: currentUpdated || new Date().toISOString(),
       });
     }
-    
+
     return entries;
   }
   

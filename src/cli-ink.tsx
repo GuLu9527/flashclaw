@@ -17,6 +17,7 @@ const API = {
   CHAT_STREAM: '/api/chat/stream',
   CHAT_CLEAR: '/api/chat/clear',
   CHAT_HISTORY: '/api/chat/history',
+  COMPACT: '/api/compact',
 } as const;
 
 // ==================== UI 常量 ====================
@@ -53,6 +54,13 @@ interface StreamMetrics {
   inputTokens: number | null;
   outputTokens: number | null;
 }
+
+type CliStreamEvent =
+  | { type: 'token'; text: string }
+  | { type: 'thinking'; text: string }
+  | { type: 'tool'; name: string; input?: Record<string, unknown> }
+  | ({ type: 'metrics' } & StreamMetrics)
+  | { type: 'error'; message: string };
 
 // ==================== 吉祥物（像素风闪电龙虾） ====================
 
@@ -296,8 +304,11 @@ function StatusBar({ group, model, contextUsed, contextMax }: {
   group: string; model: string;
   contextUsed: number; contextMax: number;
 }) {
+  const usagePct = contextMax > 0
+    ? Math.min(100, Math.round((contextUsed / contextMax) * 100))
+    : 0;
   const ctxLabel = contextMax > 0
-    ? `${Math.round((contextUsed / contextMax) * 100)}%`
+    ? `${usagePct}%`
     : '';
 
   return (
@@ -390,8 +401,88 @@ function App({ apiUrl, group, version, botName = 'FlashClaw' }: CliAppProps) {
 
     // /new
     if (trimmed === '/new' || trimmed === '/n') {
-      try { await fetch(`${apiUrl}${API.CHAT_CLEAR}`, { method: 'POST' }); } catch { /* ok */ }
+      try {
+        await fetch(`${apiUrl}${API.CHAT_CLEAR}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ group }),
+        });
+      } catch { /* ok */ }
+      setContextUsed(0);
       setMessages(prev => [...prev, { role: 'assistant', content: '✅ 已新建会话' }]);
+      return;
+    }
+
+    // /status
+    if (trimmed === '/status' || trimmed === '/s') {
+      try {
+        const res = await fetch(`${apiUrl}${API.STATUS}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const st = await res.json() as {
+          running: boolean;
+          uptime: string;
+          provider: string | null;
+          model: string | null;
+          activeSessions: number;
+          activeTaskCount: number;
+          totalTaskCount: number;
+        };
+        const providerModel = st.model ? `${st.provider || '-'} / ${st.model}` : (st.provider || '-');
+        setMessages(prev => [...prev, {
+          role: 'assistant',
+          content: `⚡ 服务状态\n运行: ${st.running ? '是' : '否'}\n运行时长: ${st.uptime}\n模型: ${providerModel}\n活跃会话: ${st.activeSessions}\n任务: ${st.activeTaskCount}/${st.totalTaskCount}`,
+        }]);
+      } catch (err) {
+        setMessages(prev => [...prev, {
+          role: 'assistant',
+          content: `❌ /status 失败: ${err instanceof Error ? err.message : String(err)}`,
+        }]);
+      }
+      return;
+    }
+
+    // /history
+    if (trimmed === '/history' || trimmed === '/h') {
+      try {
+        const res = await fetch(`${apiUrl}${API.CHAT_HISTORY}?group=${encodeURIComponent(group)}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json() as { success?: boolean; messages?: Array<{ role: string; content: string }> };
+        const history = data.messages || [];
+        if (history.length === 0) {
+          setMessages(prev => [...prev, { role: 'assistant', content: '📭 暂无历史消息' }]);
+        } else {
+          const preview = history.slice(-10).map((m) => `${m.role === 'user' ? '你' : botName}: ${m.content}`).join('\n');
+          setMessages(prev => [...prev, { role: 'assistant', content: `📜 最近 ${Math.min(10, history.length)} 条历史\n${preview}` }]);
+        }
+      } catch (err) {
+        setMessages(prev => [...prev, {
+          role: 'assistant',
+          content: `❌ /history 失败: ${err instanceof Error ? err.message : String(err)}`,
+        }]);
+      }
+      return;
+    }
+
+    // /compact
+    if (trimmed === '/compact') {
+      try {
+        const res = await fetch(`${apiUrl}${API.COMPACT}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ group }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json() as { success?: boolean; summary?: string | null };
+        setMessages(prev => [...prev, {
+          role: 'assistant',
+          content: data.summary ? `✅ 已压缩上下文\n${data.summary}` : '✅ 已触发上下文压缩',
+        }]);
+      } catch (err) {
+        setMessages(prev => [...prev, {
+          role: 'assistant',
+          content: `❌ /compact 失败: ${err instanceof Error ? err.message : String(err)}`,
+        }]);
+      }
       return;
     }
 
@@ -407,6 +498,7 @@ function App({ apiUrl, group, version, botName = 'FlashClaw' }: CliAppProps) {
     // 发送消息
     setMessages(prev => [...prev, { role: 'user', content: trimmed }]);
     setBusy(true);
+    setReceivedThinking(false);
 
     try {
       const response = await fetch(`${apiUrl}${API.CHAT_STREAM}`, {
@@ -423,90 +515,116 @@ function App({ apiUrl, group, version, botName = 'FlashClaw' }: CliAppProps) {
       const decoder = new TextDecoder();
       let responseText = '';
       let streamMetrics: StreamMetrics | null = null;
+      let streamBuffer = '';
 
-      setReceivedThinking(false);
-
-      // 添加流式消息占位（thinking + streaming）
-      // 用唯一 thinkingId 标记本次对话的 thinking，避免与之前对话的 thinking 叠加
-      const thinkingId = `thinking-${Date.now()}`;
+      // 添加流式消息占位
       setMessages(prev => [...prev, { role: 'streaming', content: '' }]);
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        const chunk = decoder.decode(value, { stream: true });
+        streamBuffer += decoder.decode(value, { stream: true });
 
-        // 思考过程（[THINKING:text] 标记）
-        const thinkingRegex = /\[THINKING:([^\]]*)\]/g;
-        let thinkingMatch;
-        let hasThinking = false;
-        let cleanChunk = chunk;
-        while ((thinkingMatch = thinkingRegex.exec(chunk)) !== null) {
-          hasThinking = true;
-          const thinkText = thinkingMatch[1];
-          setReceivedThinking(true);
-          // 实时更新本次对话的 thinking 消息
-          setMessages(prev => {
-            const msgs = [...prev];
-            // 只查找 streaming 消息紧前的 thinking（本次对话的）
-            const streamIdx = msgs.findLastIndex(m => m.role === 'streaming');
-            if (streamIdx < 0) return msgs;
-            const thinkIdx = streamIdx > 0 && msgs[streamIdx - 1]?.role === 'thinking' ? streamIdx - 1 : -1;
-            if (thinkIdx >= 0) {
-              msgs[thinkIdx] = { role: 'thinking', content: msgs[thinkIdx].content + thinkText };
-            } else {
-              msgs.splice(streamIdx, 0, { role: 'thinking', content: thinkText });
-            }
-            return msgs;
-          });
-        }
-        if (hasThinking) {
-          cleanChunk = chunk.replace(/\[THINKING:[^\]]*\]/g, '');
-          if (!cleanChunk.trim()) continue;
-        }
+        const lines = streamBuffer.split('\n');
+        streamBuffer = lines.pop() || '';
 
-        // 工具调用
-        const toolMatch = cleanChunk.match(/\[TOOL:({.*?})\]/);
-        if (toolMatch) {
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          let event: CliStreamEvent;
           try {
-            const ti = JSON.parse(toolMatch[1]) as { name: string; input?: Record<string, unknown> };
-            let params = '';
-            if (ti.input && Object.keys(ti.input).length > 0) {
-              const p = Object.entries(ti.input).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join(', ');
-              params = p.length > UI.TOOL_PARAMS_MAX_LEN ? p.slice(0, UI.TOOL_PARAMS_MAX_LEN - 3) + '...' : p;
-            }
-            // 在流式消息前插入工具调用
+            event = JSON.parse(line) as CliStreamEvent;
+          } catch {
+            continue;
+          }
+
+          if (event.type === 'token') {
+            responseText += event.text;
+            const currentText = responseText;
             setMessages(prev => {
               const msgs = [...prev];
               const streamIdx = msgs.findLastIndex(m => m.role === 'streaming');
-              if (streamIdx >= 0) msgs.splice(streamIdx, 0, { role: 'tool', content: `${ti.name}(${params})` });
+              if (streamIdx >= 0) msgs[streamIdx] = { role: 'streaming', content: currentText };
               return msgs;
             });
-            responseText += cleanChunk.replace(/\[TOOL:.*?\]/g, '');
             continue;
-          } catch { /* fall through */ }
-        }
+          }
 
-        const metricsMatch = cleanChunk.match(/\[METRICS:({.*?})\]/);
-        if (metricsMatch) {
-          try {
-            streamMetrics = JSON.parse(metricsMatch[1]) as StreamMetrics;
-            if (streamMetrics?.model) setCurrentModel(streamMetrics.model);
-            const clean = cleanChunk.replace(/\[METRICS:.*?\]/g, '');
-            if (clean) responseText += clean;
+          if (event.type === 'thinking') {
+            if (!event.text.trim()) continue;
+            setReceivedThinking(true);
+            setMessages(prev => {
+              const msgs = [...prev];
+              const streamIdx = msgs.findLastIndex(m => m.role === 'streaming');
+              if (streamIdx < 0) return msgs;
+              const thinkIdx = streamIdx > 0 && msgs[streamIdx - 1]?.role === 'thinking' ? streamIdx - 1 : -1;
+              if (thinkIdx >= 0) {
+                msgs[thinkIdx] = { role: 'thinking', content: msgs[thinkIdx].content + event.text };
+              } else {
+                msgs.splice(streamIdx, 0, { role: 'thinking', content: event.text });
+              }
+              return msgs;
+            });
             continue;
-          } catch { /* fall through */ }
-        }
+          }
 
-        responseText += cleanChunk;
-        // 实时更新流式显示
-        const currentText = responseText;
-        setMessages(prev => {
-          const msgs = [...prev];
-          const streamIdx = msgs.findLastIndex(m => m.role === 'streaming');
-          if (streamIdx >= 0) msgs[streamIdx] = { role: 'streaming', content: currentText };
-          return msgs;
-        });
+          if (event.type === 'tool') {
+            let params = '';
+            const toolInput = event.input;
+            if (toolInput && Object.keys(toolInput).length > 0) {
+              const p = Object.entries(toolInput).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join(', ');
+              params = p.length > UI.TOOL_PARAMS_MAX_LEN ? p.slice(0, UI.TOOL_PARAMS_MAX_LEN - 3) + '...' : p;
+            }
+            setMessages(prev => {
+              const msgs = [...prev];
+              const streamIdx = msgs.findLastIndex(m => m.role === 'streaming');
+              if (streamIdx >= 0) msgs.splice(streamIdx, 0, { role: 'tool', content: `${event.name}(${params})` });
+              return msgs;
+            });
+            continue;
+          }
+
+          if (event.type === 'metrics') {
+            streamMetrics = event;
+            if (streamMetrics.model) {
+              setCurrentModel(streamMetrics.model);
+              setContextMax(getModelContextWindow(streamMetrics.model));
+            }
+            continue;
+          }
+
+          if (event.type === 'error') {
+            setMessages(prev => {
+              const msgs = prev.filter(m => m.role !== 'streaming');
+              msgs.push({ role: 'assistant', content: `❌ 错误: ${event.message}` });
+              return msgs;
+            });
+            continue;
+          }
+        }
+      }
+
+      if (streamBuffer.trim()) {
+        try {
+          const event = JSON.parse(streamBuffer) as CliStreamEvent;
+          if (event.type === 'token') {
+            responseText += event.text;
+            const currentText = responseText;
+            setMessages(prev => {
+              const msgs = [...prev];
+              const streamIdx = msgs.findLastIndex(m => m.role === 'streaming');
+              if (streamIdx >= 0) msgs[streamIdx] = { role: 'streaming', content: currentText };
+              return msgs;
+            });
+          } else if (event.type === 'metrics') {
+            streamMetrics = event;
+            if (streamMetrics.model) {
+              setCurrentModel(streamMetrics.model);
+              setContextMax(getModelContextWindow(streamMetrics.model));
+            }
+          }
+        } catch {
+          // ignore partial tail
+        }
       }
 
       // 流结束，将 streaming 替换为 assistant
@@ -534,14 +652,18 @@ function App({ apiUrl, group, version, botName = 'FlashClaw' }: CliAppProps) {
         setContextUsed(prev => prev + (streamMetrics?.inputTokens ?? 0) + (streamMetrics?.outputTokens ?? 0));
       }
     } catch (err) {
-      setMessages(prev => [...prev, {
-        role: 'assistant',
-        content: `❌ 错误: ${err instanceof Error ? err.message : String(err)}`,
-      }]);
+      setMessages(prev => {
+        const msgs = prev.filter(m => m.role !== 'streaming');
+        msgs.push({
+          role: 'assistant',
+          content: `❌ 错误: ${err instanceof Error ? err.message : String(err)}`,
+        });
+        return msgs;
+      });
     }
 
     setBusy(false);
-  }, [apiUrl, group]);
+  }, [apiUrl, group, botName]);
 
   return (
     <Box flexDirection="column" height="100%">

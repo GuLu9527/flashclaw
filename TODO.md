@@ -11,6 +11,7 @@
 - [x] **压缩前记忆 Flush** — 压缩前 AI 自动提取重要信息写入长期记忆（参考 OpenClaw memoryFlush）
 - [x] **语义搜索** — 社区插件 `memory-vector`，基于 Ollama embedding 的模糊召回
 - [x] **每日日志** — memory 插件新增 `log` action，支持 `data/memory/daily/YYYY-MM-DD.md`，启动时自动加载今天+昨天日志
+- [x] **长期记忆全局化（跨渠道共享）** — 长期记忆默认改为 global，不再按 group 切分；短期上下文仍按会话隔离
 - [ ] **自动记忆提取** — 暂缓（P0 Flush 已覆盖压缩时提取，每次对话后提取对小模型成本太高）
 
 ### 0.5 渠道架构解耦（重新设计）
@@ -102,9 +103,18 @@
 | 优先级 | 问题 | 根因 | 位置 | 状态 |
 |--------|------|------|------|------|
 | P0 | **Markdown 代码块未渲染** — `renderMarkdownLine` 只处理单行标记，完全缺失 ` ``` ` 代码块、行内代码 `` `code` ``、加粗 `**bold**`、斜体 `*italic*` | `renderMarkdownLine` 无代码块状态机，调用方也未维护多行状态 | `cli-ink.tsx:69-82`, `cli-ink.tsx:169-177` | 待修复 |
-| P0 | **二次对话不显示「接收中」Spinner** — 第二次发消息时 `receivedThinking` 仍为上次对话的 `true`，导致 `busy && !receivedThinking` 始终为 `false` | `setReceivedThinking(false)` 在 `fetch` 之后（行 427），应移到 `setBusy(true)` 之后、`fetch` 之前 | `cli-ink.tsx:409,427,565` | 待修复 |
+| P0 | **二次对话不显示「接收中」Spinner** — 第二次发消息时 `receivedThinking` 仍为上次对话的 `true`，导致 `busy && !receivedThinking` 始终为 `false` | `setReceivedThinking(false)` 在 `fetch` 之后（行 427），应移到 `setBusy(true)` 之后、`fetch` 之前 | `cli-ink.tsx:409,427,565` | 已修复 |
 | P1 | **小模型 /no_think 下仍显示「思考中」** — Qwen3 `/no_think` 模式仍输出空 `<think>\n\n</think>`，状态机 yield 了空白 thinking 事件 | openai-provider 状态机 yield thinking 前未过滤纯空白内容 | `openai-provider/index.ts` 状态机 think 分支 | 待修复 |
 | P1 | **思考中括号内显示字数而非 token 数** — `msg.content.length` 是字符数，应改为 CJK/英文分段估算 token 数 | 直接用 `.length` 字符计数 | `cli-ink.tsx:127` | 待修复 |
+| P0 | **/new 可能清错会话（group 丢失）** — CLI 端调用 `/api/chat/clear` 未传 group，服务端默认清理 `main` | `/new` 请求体缺失 `group` 字段 | `cli-ink.tsx`, `plugins/cli-channel/index.ts` | 已修复 |
+| P0 | **命令提示与实现不一致** — UI 提示支持 `/status` `/history` `/compact`，但实际未实现 | slash 命令分支仅实现 `/new` `/clear` `/quit` | `cli-ink.tsx` | 已修复 |
+| P0 | **流式标记协议脆弱** — `[THINKING:...]` / `[TOOL:...]` / `[METRICS:...]` 在 chunk 边界或内容含 `]` 时易解析错误 | 文本内嵌协议 + 正则按 chunk 解析 | `plugins/cli-channel/index.ts`, `cli-ink.tsx` | 已修复 |
+| P0 | **二次对话 Spinner 丢失** — `setReceivedThinking(false)` 时机偏后，`busy && !receivedThinking` 可能被上轮状态污染 | 重置发生在 `fetch` 之后 | `cli-ink.tsx` | 已修复 |
+| P1 | **`flashclaw cli --url/--group` 参数无法生效** — 参数解析仅支持 boolean flag，导致 string 参数读取不到 | `parseArgs` 未解析 `--key=value` / `--key value` | `cli.ts` | 已修复 |
+| P1 | **流异常后可能残留 streaming 占位消息** | catch 分支未清理 `role=streaming` | `cli-ink.tsx` | 已修复 |
+| P1 | **CLI 渠道端口占用时缺少明确启动错误处理** | `server.listen` 无启动 error promise 化处理 | `plugins/cli-channel/index.ts` | 已修复 |
+| P1 | **上下文百分比显示可能超 100% 且模型切换时 context window 未同步** | 百分比未 clamp；流式 metrics 更新 model 后未更新 contextMax | `cli-ink.tsx` | 已修复 |
+| P1 | **`/new` 后状态栏上下文未刷新** — 服务端会话已清空，但前端 `contextUsed` 未重置，导致底部上下文条残留旧值 | `/new` 分支缺少 `setContextUsed(0)` | `src/cli-ink.tsx` | ✅ 已修复 |
 
 ### 6. 每日/每周报告
 - [ ] daily-report 工具插件
@@ -254,6 +264,40 @@
 | P2 | 任务超时 Promise 泄漏 — `setTimeout` ID 未保存，任务正常完成后定时器仍会触发 | `src/task-scheduler.ts:236-239` | ✅ 已修复 |
 | P2 | 默认模型 ID 不一致 — `model-capabilities` 与 `config` 默认模型不同 | `src/core/model-capabilities.ts:128`, `src/config.ts:24` | ✅ 已修复 |
 | P2 | 上下文 warning 阈值与拒绝阈值相同，warning 分支无法单独生效 | `src/core/context-guard.ts:17-19` | ✅ 已修复 |
+
+## 代码审查摘要 (2026-03-05)
+
+### 🔴 P0 — 运行正确性风险
+
+| 优先级 | 问题 | 位置 | 状态 |
+|--------|------|------|------|
+| P0 | 队列时间戳推进错误：批处理后仅推进到当前 `msg.timestamp`，可能重复处理同一批消息并重复回复 | `src/index.ts:324-328`, `src/index.ts:348-351`, `src/index.ts:411` | 待修复 |
+| P0 | `/new` 在未注册 group 场景可能“看起来成功但未真正清会话” | `src/core-api.ts:156-165`, `src/core-api.ts:289-298` | 待修复 |
+| P0 | `/compact` 在未注册 group 场景会“假成功”（`summary=null` 仍返回 success） | `src/core-api.ts:180-184`, `plugins/cli-channel/index.ts:203-205`, `src/cli-ink.tsx:474-478` | 待修复 |
+
+### 🟡 P1 — 稳定性 / 契约一致性
+
+| 优先级 | 问题 | 位置 | 状态 |
+|--------|------|------|------|
+| P1 | 任务超时后未取消原任务，可能出现“超时重试 + 原任务晚到副作用”双执行 | `src/task-scheduler.ts:245-247`, `src/task-scheduler.ts:319-362` | 待修复 |
+| P1 | CLI Channel 非法 JSON 返回 500，错误语义应为 400 | `plugins/cli-channel/index.ts:37-41`, `plugins/cli-channel/index.ts:210-213` | 待修复 |
+| P1 | CLI Channel 请求体无大小限制，超大请求可能造成内存压力 | `plugins/cli-channel/index.ts:34-35` | 待修复 |
+| P1 | Feishu `sendImage()` 失败路径未清理临时文件，可能累积到 `/tmp` | `community-plugins/feishu/index.ts:414-417`, `community-plugins/feishu/index.ts:426-428`, `community-plugins/feishu/index.ts:467-470` | 待修复 |
+| P1 | Web UI 聊天历史参数错位：`getChatHistory(50)` 把 `50` 当 group 使用 | `community-plugins/web-ui/server/routes/pages.ts:124`, `community-plugins/web-ui/server/services/chat.ts:65` | 待修复 |
+| P1 | Web UI 流式协议与渲染契约不一致：`[TOOL]`/`[METRICS]` 会污染 assistant 文本 | `community-plugins/web-ui/server/routes/api.ts:221`, `community-plugins/web-ui/server/routes/api.ts:231`, `community-plugins/web-ui/server/routes/pages.ts:279-282` | 待修复 |
+| P1 | CLI 输入历史“上下箭头浏览”当前实现缺失，但 TODO 标记为已完成 | `src/cli-ink.tsx:230-251`, `src/cli-ink.tsx:336-345` | 待修复 |
+| P1 | 记忆插件默认 scope 仍偏向分组语义，不符合“跨渠道同一 FlashClaw”预期 | `plugins/memory/index.ts`, `src/core/memory.ts` | ✅ 已修复 |
+| P1 | memory/memory-vector 插件通过类型断言访问私有配置（`mm as unknown as { config }`） | `plugins/memory/index.ts`, `community-plugins/memory-vector/index.ts` | ✅ 已修复 |
+| P2 | 记忆文件写入缺少原子写，异常中断时可能导致文件不完整 | `src/core/memory.ts` | ✅ 已修复 |
+| P2 | 记忆解析会跳过以 `#`/`>` 开头的正文行，存在内容丢失风险 | `src/core/memory.ts` | ✅ 已修复 |
+| P2 | 每次构建系统提示都同步读取近期日志，存在可避免的 IO 开销 | `src/core/memory.ts` | ✅ 已修复 |
+
+### 🟢 P2 — 建议改进
+
+| 优先级 | 问题 | 位置 | 状态 |
+|--------|------|------|------|
+| P2 | Web UI 日志监听在异常路径可能泄漏文件描述符（`openSync/readSync` 非 finally 关闭） | `community-plugins/web-ui/server/services/logs.ts:177-180`, `community-plugins/web-ui/server/services/logs.ts:190-192` | 待修复 |
+| P2 | `session-tracker` 与 `model-capabilities` 的上下文窗口映射不一致，导致 `/status` 与压缩提示可能失真 | `src/session-tracker.ts:173-196`, `src/core/model-capabilities.ts:28-58`, `src/core/model-capabilities.ts:105-123` | 待修复 |
 
 ### ✅ 亮点
 

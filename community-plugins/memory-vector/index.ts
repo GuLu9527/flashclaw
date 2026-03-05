@@ -205,10 +205,8 @@ const plugin: ToolPlugin = {
     }
 
     try {
-      // 获取记忆目录
-      const { getMemoryManager } = await import('../../src/core/memory.js');
-      const mm = getMemoryManager();
-      const memoryDir = (mm as unknown as { config: { memoryDir: string } }).config.memoryDir;
+      // 获取记忆目录（默认 data/memory，可通过 MEMORY_DIR 覆盖）
+      const memoryDir = process.env.MEMORY_DIR || 'data/memory';
 
       // 加载所有记忆片段
       const snippets = loadMemorySnippets(memoryDir);

@@ -55,6 +55,26 @@ function sendJson(res: http.ServerResponse, status: number, data: unknown): void
   res.end(JSON.stringify(data));
 }
 
+type CliStreamEvent =
+  | { type: 'token'; text: string }
+  | { type: 'thinking'; text: string }
+  | { type: 'tool'; name: string; input: unknown }
+  | {
+      type: 'metrics';
+      durationMs: number;
+      model: string;
+      inputTokens: number | null;
+      outputTokens: number | null;
+    }
+  | { type: 'error'; message: string };
+
+/**
+ * 写入 NDJSON 流事件
+ */
+function writeStreamEvent(res: http.ServerResponse, event: CliStreamEvent): void {
+  res.write(`${JSON.stringify(event)}\n`);
+}
+
 /**
  * 处理 HTTP 请求
  */
@@ -105,7 +125,7 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
       return;
     }
 
-    // POST /api/chat/stream — 流式对话
+    // POST /api/chat/stream — 流式对话（NDJSON 事件流）
     if (url === '/api/chat/stream' && method === 'POST') {
       const body = await parseBody(req);
       const message = body.message as string;
@@ -116,9 +136,9 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
         return;
       }
 
-      // 流式响应
+      // NDJSON 流式响应
       res.writeHead(200, {
-        'Content-Type': 'text/plain; charset=utf-8',
+        'Content-Type': 'application/x-ndjson; charset=utf-8',
         'Transfer-Encoding': 'chunked',
         'Access-Control-Allow-Origin': '*',
         'Cache-Control': 'no-cache',
@@ -131,27 +151,28 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
           userId: 'cli-user',
           platform: 'cli-channel',
           onToken: (chunk: string) => {
-            res.write(chunk);
+            writeStreamEvent(res, { type: 'token', text: chunk });
           },
           onToolUse: (name: string, input: unknown) => {
-            res.write(`[TOOL:${JSON.stringify({ name, input })}]`);
+            writeStreamEvent(res, { type: 'tool', name, input });
           },
           onThinking: (text: string) => {
-            res.write(`[THINKING:${text}]`);
+            writeStreamEvent(res, { type: 'thinking', text });
           },
         });
 
         // 发送 metrics
         if (result.metrics) {
-          res.write(`[METRICS:${JSON.stringify({
+          writeStreamEvent(res, {
+            type: 'metrics',
             durationMs: result.metrics.durationMs,
             model: result.metrics.model,
             inputTokens: result.metrics.usage?.inputTokens ?? null,
             outputTokens: result.metrics.usage?.outputTokens ?? null,
-          })}]`);
+          });
         }
       } catch (err) {
-        res.write(`\n\n❌ 错误: ${err instanceof Error ? err.message : String(err)}`);
+        writeStreamEvent(res, { type: 'error', message: err instanceof Error ? err.message : String(err) });
       }
 
       res.end();
@@ -214,8 +235,15 @@ const plugin: ChannelPlugin = {
       });
     });
 
-    server.listen(cliPort, () => {
-      logger.debug({ port: cliPort }, '⚡ CLI 渠道 API 已启动');
+    await new Promise<void>((resolve, reject) => {
+      server!.once('error', (err) => {
+        logger.error({ err, port: cliPort }, 'CLI-Channel 启动失败');
+        reject(err);
+      });
+      server!.listen(cliPort, () => {
+        logger.debug({ port: cliPort }, '⚡ CLI 渠道 API 已启动');
+        resolve();
+      });
     });
   },
 

@@ -366,7 +366,7 @@ async function sleep(ms: number): Promise<void> {
 /**
  * 获取群组的系统提示词
  */
-function getGroupSystemPrompt(group: RegisteredGroup, isMain: boolean, isScheduledTask?: boolean): string {
+function getGroupSystemPrompt(group: RegisteredGroup, userId: string, isMain: boolean, isScheduledTask?: boolean): string {
   const memoryManager = getMemoryManager();
   
   // 获取当前时间（用于定时任务等需要时间计算的场景）
@@ -460,7 +460,7 @@ send_message({ image: "latest_screenshot", caption: "可选的说明文字" })
   }
   
   // 构建包含长期记忆的系统提示词
-  let systemPrompt = memoryManager.buildSystemPrompt(group.folder, basePrompt);
+  let systemPrompt = memoryManager.buildSystemPrompt(group.folder, userId, basePrompt);
   
   // 添加权限说明
   if (isMain) {
@@ -655,7 +655,12 @@ async function runAgentOnce(
   const messages: ChatMessage[] = [...context, userMessage];
 
   // 获取系统提示词
-  const systemPrompt = getGroupSystemPrompt(group, input.isMain, input.isScheduledTask);
+  const systemPrompt = getGroupSystemPrompt(
+    group,
+    input.userId || input.chatJid,
+    input.isMain,
+    input.isScheduledTask
+  );
 
   // 获取工具定义（插件工具 + 内置后备工具）
   const allTools = getAllTools();
