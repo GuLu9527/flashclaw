@@ -13,9 +13,11 @@
 - **CLI thinking UI** — 思考内容折叠显示字数、Ctrl+T 展开完整推理过程；Spinner 显示"接收中..."，收到 thinking 后自动消失
 
 ### 改进
+- **无渠道启动支持** — 删除 CLI 渠道后，`flashclaw start` 允许在未启用任何 channel 的情况下继续运行，保留 Web UI 访问入口
 - **CLI 底部状态栏精简** — 移除动态文字（思考中/接收中），只保留固定四项信息（群组/模型/上下文进度）
 
 ### 修复
+- **移除 CLI 渠道与终端入口** — 删除 `flashclaw cli`、`src/cli-ink.tsx` 与 `plugins/cli-channel`，避免重复维护独立终端通信链路
 - **handleToolUse 后续文本回传** — 工具调用后模型的后续回复现在正确通过 `onToken` 发送给 CLI，不再丢失
 - **工具调用参数显示** — OpenAI provider 流式 `tool_use` 事件改为流结束后发送完整 arguments（修复 CLI 显示逐字索引的问题）
 - **handleToolUse 内工具调用事件** — 工具链内的工具执行也触发 `onToolUse` 回调，CLI 可显示

@@ -272,14 +272,45 @@ pagesRoutes.get('/chat', async (c) => {
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
             
-            // 流式渲染：累积原始文本，每次 chunk 重新解析 Markdown
+            // NDJSON 流式解析：每行一个完整 JSON 事件，不会被 chunk 边界截断
+            let lineBuf = '';
+            let renderScheduled = false;
+            const flushAssistantMessage = () => {
+              renderScheduled = false;
+              assistantMsg.contentEl.innerHTML = renderMarkdown(assistantMsg.rawText);
+              scrollToBottom();
+            };
+            const scheduleAssistantRender = () => {
+              if (renderScheduled) return;
+              renderScheduled = true;
+              requestAnimationFrame(flushAssistantMessage);
+            };
             while (true) {
               const { value, done } = await reader.read();
               if (done) break;
-              const chunk = decoder.decode(value, { stream: true });
-              assistantMsg.rawText += chunk;
-              assistantMsg.contentEl.innerHTML = renderMarkdown(assistantMsg.rawText);
-              scrollToBottom();
+              lineBuf += decoder.decode(value, { stream: true });
+              // 按换行拆分，处理完整的行
+              const lines = lineBuf.split('\\n');
+              lineBuf = lines.pop() || ''; // 最后一段可能不完整，留到下次
+              for (const line of lines) {
+                if (!line.trim()) continue;
+                try {
+                  const evt = JSON.parse(line);
+                  if (evt.type === 'token') {
+                    assistantMsg.rawText += evt.data;
+                    scheduleAssistantRender();
+                  } else if (evt.type === 'tool') {
+                    addMessage('assistant', '🔧 调用工具: ' + (evt.data?.name || ''));
+                  } else if (evt.type === 'error') {
+                    assistantMsg.rawText += '\\n\\n❌ 错误: ' + evt.data;
+                    scheduleAssistantRender();
+                  }
+                  // thinking / metrics / done 事件静默处理
+                } catch { /* 非 JSON 行忽略 */ }
+              }
+            }
+            if (renderScheduled) {
+              flushAssistantMessage();
             }
           }
         } catch (err) {

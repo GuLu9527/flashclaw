@@ -14,6 +14,7 @@ import type {
   PluginConfig,
   ImageBlock,
   TextBlock,
+  ToolDefinition,
 } from '../../src/plugins/types';
 
 // ==================== 内部状态 ====================
@@ -26,6 +27,8 @@ let model: string = 'claude-sonnet-4-20250514';
 const MAX_TOOL_CALL_DEPTH = 20;
 const MAX_TOOL_RESULT_CHARS = 4000;
 const KEEP_RECENT_TOOL_ROUNDS = 2;
+const MOCK_RESPONSE_PREFIX = process.env.FLASHCLAW_MOCK_RESPONSE_PREFIX || 'MOCK';
+const MOCK_TOOL_MARKER = process.env.FLASHCLAW_MOCK_TOOL_MARKER || '[tool:send_message]';
 
 function truncateToolResult(content: string, maxChars: number): string {
   if (content.length <= maxChars) return content;
@@ -100,6 +103,88 @@ function extractText(response: Anthropic.Message): string {
     (block): block is Anthropic.TextBlock => block.type === 'text'
   );
   return textBlocks.map(block => block.text).join('');
+}
+
+function isMockMode(): boolean {
+  return process.env.FLASHCLAW_MOCK_API === '1';
+}
+
+function contentToText(content: ChatMessage['content']): string {
+  if (typeof content === 'string') return content;
+  return content
+    .filter((block): block is TextBlock => block.type === 'text')
+    .map(block => block.text)
+    .join('');
+}
+
+function getLastUserText(messages: ChatMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const msg = messages[i];
+    if (msg.role === 'user') {
+      return contentToText(msg.content);
+    }
+  }
+  return '';
+}
+
+function shouldMockToolUse(prompt: string, tools?: ToolDefinition[]): boolean {
+  if (!tools || tools.length === 0) return false;
+  if (process.env.FLASHCLAW_MOCK_FORCE_TOOL === '1') return true;
+  return prompt.includes(MOCK_TOOL_MARKER);
+}
+
+function buildMockMessage(params: {
+  content: Array<TextBlock | { type: 'tool_use'; id: string; name: string; input: unknown }>;
+  stopReason: 'end_turn' | 'tool_use';
+  model: string;
+}): Anthropic.Message {
+  return {
+    id: `mock-${Date.now()}`,
+    type: 'message',
+    role: 'assistant',
+    model: params.model,
+    content: params.content as Anthropic.Message['content'],
+    stop_reason: params.stopReason,
+    stop_sequence: null,
+    usage: {
+      input_tokens: 1,
+      output_tokens: 1,
+      cache_creation_input_tokens: null,
+      cache_read_input_tokens: null,
+      cache_creation: null,
+      server_tool_use: null,
+      service_tier: 'standard',
+    },
+  };
+}
+
+async function createMockResponse(messages: ChatMessage[], options?: ChatOptions): Promise<Anthropic.Message> {
+  const prompt = getLastUserText(messages);
+  const tools = options?.tools;
+  const useTool = shouldMockToolUse(prompt, tools);
+
+  if (useTool && tools && tools.length > 0) {
+    const toolName = tools.find(t => t.name === 'send_message')?.name || tools[0].name;
+    const toolInput = { content: `${MOCK_RESPONSE_PREFIX} TOOL: ${prompt}` };
+    return buildMockMessage({
+      model,
+      stopReason: 'tool_use',
+      content: [
+        {
+          type: 'tool_use',
+          id: 'mock_tool_1',
+          name: toolName,
+          input: toolInput,
+        },
+      ],
+    });
+  }
+
+  return buildMockMessage({
+    model,
+    stopReason: 'end_turn',
+    content: [{ type: 'text', text: `${MOCK_RESPONSE_PREFIX}: ${prompt}` }],
+  });
 }
 
 async function streamFollowUp(
@@ -274,6 +359,13 @@ const anthropicProvider: AIProviderPlugin = {
   description: 'Anthropic AI Provider - 支持 Claude 等模型',
 
   async init(config: PluginConfig): Promise<void> {
+    model = config.model as string || process.env.AI_MODEL || process.env.ANTHROPIC_MODEL || (isMockMode() ? 'mock-model' : 'claude-sonnet-4-20250514');
+
+    if (isMockMode()) {
+      client = null;
+      return;
+    }
+
     const apiKey = config.apiKey as string || process.env.ANTHROPIC_AUTH_TOKEN || process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
       throw new Error('Missing API key: ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY');
@@ -285,14 +377,16 @@ const anthropicProvider: AIProviderPlugin = {
       maxRetries: 0,
       timeout: config.timeout ? Number(config.timeout) : 60000,
     });
-
-    model = config.model as string || process.env.AI_MODEL || process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-20250514';
   },
 
   async chat(
     messages: ChatMessage[],
     options?: ChatOptions
   ): Promise<Anthropic.Message> {
+    if (isMockMode()) {
+      return createMockResponse(messages, options);
+    }
+
     if (!client) {
       throw new Error('Provider not initialized. Call init() first.');
     }
@@ -329,6 +423,24 @@ const anthropicProvider: AIProviderPlugin = {
     messages: ChatMessage[],
     options?: ChatOptions
   ): AsyncGenerator<StreamEvent> {
+    if (isMockMode()) {
+      const response = await createMockResponse(messages, options);
+      for (const block of response.content) {
+        if (block.type === 'text') {
+          yield { type: 'text', text: block.text };
+        } else if (block.type === 'tool_use') {
+          yield {
+            type: 'tool_use',
+            id: block.id,
+            name: block.name,
+            input: block.input,
+          };
+        }
+      }
+      yield { type: 'done', message: response };
+      return;
+    }
+
     if (!client) {
       throw new Error('Provider not initialized. Call init() first.');
     }
@@ -441,6 +553,25 @@ const anthropicProvider: AIProviderPlugin = {
     heartbeat?: HeartbeatCallback
   ): Promise<string> {
     const anthropicResponse = response as Anthropic.Message;
+
+    if (isMockMode()) {
+      const toolUseBlocks = anthropicResponse.content.filter(
+        (block): block is Anthropic.ToolUseBlock => block.type === 'tool_use'
+      );
+
+      if (toolUseBlocks.length === 0) {
+        return extractText(anthropicResponse);
+      }
+
+      const results: string[] = [];
+      for (const toolUse of toolUseBlocks) {
+        heartbeat?.();
+        const result = await executeTool(toolUse.name, toolUse.input);
+        results.push(typeof result === 'string' ? result : JSON.stringify(result));
+      }
+      return results.join('\n');
+    }
+
     const apiMessages: Anthropic.MessageParam[] = messages.map(msg => ({
       role: msg.role as 'user' | 'assistant',
       content: msg.content,

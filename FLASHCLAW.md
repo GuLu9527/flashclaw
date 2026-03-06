@@ -57,9 +57,8 @@ flashclaw/
 │       ├── installer.ts      # 插件安装器
 │       └── types.ts          # 插件类型定义
 │
-├── plugins/                  # 内置插件（10个）
+├── plugins/                  # 内置插件（9个）
 │   ├── anthropic-provider/   # Anthropic AI Provider（默认）
-│   ├── cli-channel/          # CLI 终端渠道
 │   ├── send-message/         # 发送消息工具
 │   ├── schedule-task/        # 创建定时任务
 │   ├── list-tasks/           # 列出定时任务
@@ -477,7 +476,6 @@ npm run typecheck    # 类型检查
 # CLI
 flashclaw                          # 启动服务（默认）
 flashclaw start                    # 启动服务
-flashclaw cli                      # 终端对话渠道（连接服务）
 flashclaw init                     # 交互式初始化配置
 flashclaw init --non-interactive --api-key sk-xxx  # 非交互式初始化
 flashclaw doctor                   # 环境诊断

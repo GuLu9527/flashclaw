@@ -90,7 +90,6 @@ ${bold('用法:')}
 
 ${bold('命令:')}
   ${cyan('start')}                       启动服务
-  ${cyan('cli')}                         终端对话渠道（连接服务）
   ${cyan('plugins list')}                列出已安装插件
   ${cyan('plugins list --available')}    列出可用插件
   ${cyan('plugins install <name>')}      安装插件
@@ -558,17 +557,6 @@ async function main(): Promise<void> {
       await handleConfigCommand(subcommand, args);
       break;
 
-    case 'cli': {
-      const { startInkCli } = await import('./cli-ink.js');
-      await startInkCli({
-        apiUrl: typeof flags['url'] === 'string' ? flags['url'] as string : `http://127.0.0.1:${process.env.CLI_PORT || '3001'}`,
-        group: typeof flags['group'] === 'string' ? flags['group'] as string : 'main',
-        version: VERSION,
-        botName: process.env.BOT_NAME || 'FlashClaw',
-      });
-      break;
-    }
-
     case 'version':
       showVersion();
       break;
@@ -583,9 +571,6 @@ async function main(): Promise<void> {
       process.exit(1);
   }
 }
-
-// CLI 渠道客户端已迁移至 cli-ink.tsx (React + Ink)
-
 
 // ==================== 配置管理 ====================
 

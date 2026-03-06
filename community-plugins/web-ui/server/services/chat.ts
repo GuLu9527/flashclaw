@@ -1,237 +1,89 @@
 /**
  * 聊天服务
- * 提供与 FlashClaw AI 对话的能力
+ * 通过 core-api 统一接口与 AI 对话
+ * 消息持久化优先复用 src/db.ts 中的现有 helper
  */
 
 import { randomUUID } from 'crypto';
+import { getChatHistory as getStoredChatHistory, storeChatMetadata, storeMessage } from '../../../../src/db.js';
 
-// 根据 group 名称生成聊天会话 ID
-function getChatJid(groupName: string): string {
-  return `${groupName}-chat`;
+// ==================== core-api / DB 访问 ====================
+
+function getCoreApi() {
+  const api = global.__flashclaw_core_api;
+  if (!api) {
+    throw new Error('核心 API 未初始化，请确保 FlashClaw 正常启动');
+  }
+  return api;
 }
 
-// 使用全局数据库实例
 function getDb() {
-  const db = (global as any).__flashclaw_db;
-  if (!db) {
-    throw new Error('数据库未初始化');
-  }
+  const db = global.__flashclaw_db;
+  if (!db) throw new Error('数据库未初始化');
   return db;
 }
 
-// 获取全局注入的 runAgent 函数
-function getRunAgent() {
-  const runAgent = (global as any).__flashclaw_run_agent;
-  if (!runAgent) {
-    return null;
-  }
-  return runAgent;
-}
-
-// 获取全局注册的群组
-function getRegisteredGroups() {
-  const groups = (global as any).__flashclaw_registered_groups;
-  return groups || new Map();
-}
+// ==================== 类型定义 ====================
 
 export interface ChatMessage {
-  id: string;
+  id?: string;
   role: 'user' | 'assistant';
   content: string;
-  timestamp: string;
+  timestamp?: string;
 }
 
-interface AgentUsageMetrics {
-  inputTokens: number;
-  outputTokens: number;
-}
-
-interface AgentRunMetrics {
+interface StreamMetrics {
   durationMs: number;
   model: string;
-  usage?: AgentUsageMetrics;
+  inputTokens: number | null;
+  outputTokens: number | null;
 }
 
-interface AgentResult {
-  status: 'success' | 'error';
-  result?: string | null;
-  error?: string;
-  metrics?: AgentRunMetrics;
+const WEB_USER_ID = 'web-user';
+const WEB_PLATFORM = 'web-ui';
+
+// ==================== DB 持久化 ====================
+
+function getChatJid(group: string): string {
+  return `${group}-chat`;
 }
+
+function saveMessageToDb(role: 'user' | 'assistant', content: string, group: string): void {
+  try {
+    const chatJid = getChatJid(group);
+    const timestamp = new Date().toISOString();
+    storeChatMetadata(chatJid, timestamp, `${group} Chat`);
+    storeMessage({
+      id: randomUUID(),
+      chatId: chatJid,
+      senderId: role,
+      senderName: role === 'user' ? '用户' : 'FlashClaw',
+      content,
+      timestamp,
+      isFromMe: role === 'assistant',
+    });
+  } catch {
+    // DB 写入失败不影响聊天功能
+  }
+}
+
+// ==================== 公开接口 ====================
 
 /**
- * 获取聊天历史
+ * 获取聊天历史（从 DB 读取）
  */
 export function getChatHistory(group = 'main', limit = 50): ChatMessage[] {
-  const chatJid = getChatJid(group);
   try {
-    const db = getDb();
-    const messages = db.prepare(`
-      SELECT id, sender, content, timestamp
-      FROM messages
-      WHERE chat_jid = ?
-      ORDER BY timestamp DESC
-      LIMIT ?
-    `).all(chatJid, limit);
-
-    return messages.reverse().map((msg: any) => ({
-      id: msg.id,
-      role: msg.sender === 'user' ? 'user' : 'assistant',
-      content: msg.content,
-      timestamp: msg.timestamp,
-    }));
+    return getStoredChatHistory(getChatJid(group), limit)
+      .reverse()
+      .map(msg => ({
+        id: msg.id,
+        role: msg.sender === 'user' ? 'user' : 'assistant',
+        content: msg.content,
+        timestamp: msg.timestamp,
+      }));
   } catch {
     return [];
-  }
-}
-
-/**
- * 保存消息到数据库
- */
-function saveMessage(role: 'user' | 'assistant', content: string, group: string): string {
-  const chatJid = getChatJid(group);
-  const chatName = group === 'web-ui' ? 'Web UI Chat' : group === 'main' ? 'CLI Chat' : `${group} Chat`;
-  const db = getDb();
-  const id = randomUUID();
-  const timestamp = new Date().toISOString();
-
-  // 确保 chat 记录存在
-  db.prepare(`
-    INSERT OR IGNORE INTO chats (jid, name, last_message_time)
-    VALUES (?, ?, ?)
-  `).run(chatJid, chatName, timestamp);
-
-  // 更新最后消息时间
-  db.prepare(`
-    UPDATE chats SET last_message_time = ? WHERE jid = ?
-  `).run(timestamp, chatJid);
-
-  // 保存消息
-  db.prepare(`
-    INSERT INTO messages (id, chat_jid, sender, sender_name, content, timestamp)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(id, chatJid, role, role === 'user' ? '用户' : 'FlashClaw', content, timestamp);
-  
-  return id;
-}
-
-/**
- * 根据 group 名称获取群组配置
- */
-function resolveGroup(groupName: string) {
-  const groups = getRegisteredGroups();
-  let group = groups.get(groupName);
-
-  if (!group) {
-    // 如果是 CLI 传递的 group，使用 'main' 群组的配置
-    group = groups.get('main');
-  }
-
-  if (!group) {
-    // 如果没有注册任何群组，创建默认配置
-    const isWebUI = groupName === 'web-ui';
-    group = {
-      folder: groupName,
-      name: isWebUI ? 'Web UI' : 'CLI',
-      agentConfig: { timeout: 120000 }
-    };
-  }
-
-  return group;
-}
-
-/**
- * 合并流式输出与最终结果
- */
-function finalizeStreamedResponse(
-  streamed: string,
-  finalText: string,
-  onToken?: (chunk: string) => void
-): string {
-  if (!finalText) {
-    return streamed;
-  }
-
-  if (!streamed) {
-    onToken?.(finalText);
-    return finalText;
-  }
-
-  if (finalText.startsWith(streamed)) {
-    const rest = finalText.slice(streamed.length);
-    if (rest) {
-      onToken?.(rest);
-    }
-    return finalText;
-  }
-
-  // 不可合并时直接追加完整结果
-  onToken?.(finalText);
-  return finalText;
-}
-
-/**
- * 发送消息并获取 AI 回复（可选流式）
- */
-async function sendMessageInternal(
-  userMessage: string,
-  groupName: string,
-  onToken?: (chunk: string) => void,
-  onToolUse?: (toolName: string, input: unknown) => void,
-  onMetrics?: (metrics: AgentRunMetrics) => void
-): Promise<string> {
-  const chatJid = getChatJid(groupName);
-
-  // 保存用户消息
-  saveMessage('user', userMessage, groupName);
-
-  try {
-    const runAgent = getRunAgent();
-    if (!runAgent) {
-      const errorMsg = 'Agent 未初始化，请确保 FlashClaw 正常启动';
-      const finalText = `错误: ${errorMsg}`;
-      saveMessage('assistant', finalText, groupName);
-      onToken?.(finalText);
-      return finalText;
-    }
-
-    const group = resolveGroup(groupName);
-    const isMain = groupName === 'main';
-    let streamed = '';
-
-    const result = await runAgent(group, {
-      prompt: userMessage,
-      groupFolder: group.folder,
-      chatJid,
-      isMain,
-      userId: isMain ? 'web-user' : 'cli-user',
-      onToken: onToken ? (chunk: string) => {
-        streamed += chunk;
-        onToken(chunk);
-      } : undefined,
-      onToolUse: onToolUse
-    }) as AgentResult;
-
-    if (result.metrics) {
-      onMetrics?.(result.metrics);
-    }
-
-    if (result.status === 'success' && result.result) {
-      const finalText = finalizeStreamedResponse(streamed, String(result.result), onToken);
-      saveMessage('assistant', finalText, groupName);
-      return finalText;
-    } else {
-      const errorMsg = result.error || '未收到响应';
-      const finalText = finalizeStreamedResponse(streamed, `错误: ${errorMsg}`, onToken);
-      saveMessage('assistant', finalText, groupName);
-      return finalText;
-    }
-  } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : '发生未知错误';
-    const finalText = `错误: ${errorMsg}`;
-    onToken?.(finalText);
-    saveMessage('assistant', finalText, groupName);
-    return finalText;
   }
 }
 
@@ -239,30 +91,76 @@ async function sendMessageInternal(
  * 发送消息并获取 AI 回复（非流式）
  */
 export async function sendMessage(userMessage: string, group = 'main'): Promise<string> {
-  return sendMessageInternal(userMessage, group);
+  saveMessageToDb('user', userMessage, group);
+
+  const api = getCoreApi();
+  const result = await api.chat({
+    message: userMessage,
+    group,
+    userId: WEB_USER_ID,
+    platform: WEB_PLATFORM,
+  });
+
+  saveMessageToDb('assistant', result.response, group);
+  return result.response;
 }
 
 /**
- * 发送消息并获取 AI 回复（流式）
+ * 发送消息并获取 AI 回复（流式，支持 thinking/tool/metrics 回调）
  */
 export async function sendMessageStream(
   userMessage: string,
-  group = 'main',
-  onToken: (chunk: string) => void,
-  onToolUse?: (toolName: string, input: unknown) => void,
-  onMetrics?: (metrics: AgentRunMetrics) => void
+  options: {
+    group?: string;
+    onToken: (chunk: string) => void;
+    onToolUse?: (toolName: string, input: unknown) => void;
+    onThinking?: (text: string) => void;
+    onMetrics?: (metrics: StreamMetrics) => void;
+  },
 ): Promise<string> {
-  return sendMessageInternal(userMessage, group, onToken, onToolUse, onMetrics);
+  const group = options.group || 'main';
+  saveMessageToDb('user', userMessage, group);
+
+  const api = getCoreApi();
+  const result = await api.chat({
+    message: userMessage,
+    group,
+    userId: WEB_USER_ID,
+    platform: WEB_PLATFORM,
+    onToken: options.onToken,
+    onToolUse: options.onToolUse,
+    onThinking: options.onThinking,
+  });
+
+  if (result.response) {
+    saveMessageToDb('assistant', result.response, group);
+  }
+
+  if (options.onMetrics && result.metrics) {
+    options.onMetrics({
+      durationMs: result.metrics.durationMs,
+      model: result.metrics.model,
+      inputTokens: result.metrics.usage?.inputTokens ?? null,
+      outputTokens: result.metrics.usage?.outputTokens ?? null,
+    });
+  }
+
+  return result.response;
 }
 
 /**
  * 清空聊天历史
  */
 export function clearChatHistory(group = 'main'): boolean {
-  const chatJid = getChatJid(group);
   try {
+    // 清除 DB 中的消息记录
     const db = getDb();
+    const chatJid = getChatJid(group);
     db.prepare('DELETE FROM messages WHERE chat_jid = ?').run(chatJid);
+
+    // 清除 core-api 的内存上下文
+    const api = getCoreApi();
+    api.clearSession(group);
     return true;
   } catch {
     return false;

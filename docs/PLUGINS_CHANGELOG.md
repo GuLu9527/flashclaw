@@ -5,6 +5,9 @@
 
 ## [Unreleased]
 
+### Removed
+- 旧 CLI 终端交互插件（已移除，终端交互改为仅保留 Web UI）
+
 ---
 
 ## [1.7.0] - 2026-03-01
@@ -12,7 +15,7 @@
 ### Added
 - anthropic-provider 内置插件（默认 AI Provider）
 - openai-provider 社区插件（支持 OpenAI、Ollama、LocalAI 等兼容服务）
-- cli-channel 内置插件（CLI 终端交互渠道）
+- 旧 CLI 终端交互插件
 
 ### Changed
 - feishu 从内置插件移至 community-plugins

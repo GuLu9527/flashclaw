@@ -1,7 +1,7 @@
 /**
  * FlashClaw 核心 API 层
  * 
- * 所有渠道（CLI、飞书、Telegram、Web UI）的统一入口。
+ * 所有渠道（飞书、Telegram、Web UI 等）的统一入口。
  * 渠道插件只做消息转发，核心逻辑统一在此处理。
  * 
  * 解耦目标：
@@ -91,7 +91,7 @@ function getDeps(): CoreDependencies {
 // ==================== 状态查询 ====================
 
 /**
- * 获取服务状态（统一接口，CLI/Web UI/健康检查都用这个）
+ * 获取服务状态（统一接口，Web UI/健康检查/其他调用方都用这个）
  */
 export function getStatus(): ServiceStatus {
   const d = getDeps();
@@ -298,8 +298,8 @@ export async function chat(params: ChatParams): Promise<ChatResult> {
   }
 
   const agentResult = await d.executeAgent(group, params.message, chatId, {
-    userId: params.userId || 'cli-user',
-    platform: params.platform || 'cli',
+    userId: params.userId || 'direct-user',
+    platform: params.platform || 'direct',
     onToken: params.onToken,
     onToolUse: params.onToolUse,
     onThinking: params.onThinking,

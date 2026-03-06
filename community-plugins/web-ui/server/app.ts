@@ -6,7 +6,8 @@ import { Hono } from 'hono';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { timingSafeEqual, createHash } from 'crypto';
 import { fileURLToPath } from 'url';
-import { dirname, resolve } from 'path';
+import { dirname, resolve, join } from 'path';
+import { readFileSync } from 'fs';
 import { pagesRoutes } from './routes/pages.js';
 import { apiRoutes } from './routes/api.js';
 import { sseRoutes } from './routes/sse.js';
@@ -16,6 +17,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 /** 插件根目录（web-ui/） */
 const pluginRoot = resolve(__dirname, '..');
+/** React 构建产物目录 */
+const frontendDist = resolve(pluginRoot, 'frontend', 'dist');
 
 function safeCompare(a: string, b: string): boolean {
   const hashA = createHash('sha256').update(a).digest();
@@ -92,7 +95,7 @@ export function createApp(options: AppOptions = {}) {
     });
   }
 
-  // 静态文件 — 使用绝对路径，确保无论 CWD 在哪都能正确加载
+  // 静态文件（旧版兼容）
   app.use('/public/*', serveStatic({ root: pluginRoot }));
 
   // API 路由
@@ -101,8 +104,22 @@ export function createApp(options: AppOptions = {}) {
   // SSE 路由
   app.route('/sse', sseRoutes);
 
-  // 页面路由
-  app.route('/', pagesRoutes);
+  let reactIndexHtml: string | null = null;
+  try {
+    reactIndexHtml = readFileSync(join(frontendDist, 'index.html'), 'utf-8');
+  } catch {
+    reactIndexHtml = null;
+  }
+
+  if (reactIndexHtml !== null) {
+    // React SPA 模式：服务构建产物
+    app.use('/assets/*', serveStatic({ root: frontendDist }));
+    // SPA 回退：所有非 API/SSE 路由都返回 index.html
+    app.get('*', (c) => c.html(reactIndexHtml));
+  } else {
+    // 回退：使用旧版服务端渲染模板
+    app.route('/', pagesRoutes);
+  }
 
   return app;
 }

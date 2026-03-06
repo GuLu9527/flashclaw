@@ -60,6 +60,8 @@ Web UI 会随 FlashClaw 主服务自动启动：
 flashclaw start
 ```
 
+即使当前没有启用任何 channel 插件，只要主服务正常启动，Web UI 仍可单独使用（适合本地管理、调试和直接发起 AI 对话）。
+
 启动后访问：`http://localhost:3000`（默认地址）
 
 ### 认证

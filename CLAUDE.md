@@ -166,7 +166,6 @@ src/                    # 核心代码（尽量不动）
 ├── index.ts            # 主入口、消息路由
 ├── core-api.ts         # 核心 API 层（所有渠道的统一入口）
 ├── cli.ts              # CLI 命令行工具
-├── cli-ink.tsx         # CLI 终端 UI（React + Ink）
 ├── commands.ts         # 聊天命令处理
 ├── commands/           # CLI 子命令
 │   ├── init.ts         # 交互式初始化向导
@@ -197,9 +196,8 @@ src/                    # 核心代码（尽量不动）
 │   └── retry.ts
 └── ...
 
-plugins/                # 内置插件（10个）
+plugins/                # 内置插件（9个）
 ├── anthropic-provider/ # Anthropic AI Provider（默认）
-├── cli-channel/        # CLI 渠道（独立 HTTP 服务，端口 3001）
 ├── schedule-task/      # 定时任务工具
 ├── list-tasks/         # 查看任务列表
 ├── cancel-task/        # 取消任务
@@ -289,7 +287,6 @@ FEISHU_APP_SECRET=
 
 ```bash
 flashclaw start                      # 启动服务
-flashclaw cli                        # 终端对话渠道（连接服务）
 flashclaw init                       # 交互式初始化配置
 flashclaw init --non-interactive --api-key <key>  # 非交互式初始化
 flashclaw doctor                     # 检查运行环境

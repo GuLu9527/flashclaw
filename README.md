@@ -46,7 +46,6 @@ flashclaw doctor
 |------|------|
 | `flashclaw` | 启动服务（默认） |
 | `flashclaw start` | 启动服务 |
-| `flashclaw cli` | 终端对话渠道（连接服务） |
 | `flashclaw init` | 交互式初始化配置 |
 | `flashclaw doctor` | 检查运行环境 |
 | `flashclaw security` | 安全审计（检查配置和环境安全隐患） |
@@ -82,9 +81,8 @@ flashclaw plugins install hello-world
 FlashClaw 采用乐高式插件架构，添加功能就像放 Minecraft Mod 一样简单：
 
 ```
-plugins/                   # 内置插件（10个）
+plugins/                   # 内置插件（9个）
 ├── anthropic-provider/    # Anthropic AI Provider（默认）
-├── cli-channel/           # CLI 终端渠道
 ├── send-message/          # 发送消息工具
 ├── schedule-task/         # 创建定时任务
 ├── list-tasks/            # 列出定时任务
@@ -210,9 +208,8 @@ flashclaw/
 │       ├── installer.ts     # 插件安装器
 │       └── types.ts         # 插件类型定义
 │
-├── plugins/                  # 内置插件（10个）
+├── plugins/                  # 内置插件（9个）
 │   ├── anthropic-provider/  # Anthropic AI Provider（默认）
-│   ├── cli-channel/         # CLI 终端渠道
 │   ├── memory/              # 长期记忆
 │   ├── schedule-task/       # 定时任务
 │   ├── list-tasks/          # 列出任务

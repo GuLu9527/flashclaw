@@ -124,7 +124,7 @@ async function processInbox() {
         senderName: data.senderName || data.sender_name || 'E2E User',
         content: data.content || data.text || '',
         timestamp: data.timestamp || new Date().toISOString(),
-        platform: 'e2e',
+        platform: 'e2e-channel',
         attachments: data.attachments,
         mentions: data.mentions
       };
@@ -241,6 +241,7 @@ describe('e2e', () => {
       env: {
         ...process.env,
         FLASHCLAW_HOME: tempDir,
+        AI_PROVIDER: 'anthropic-provider',
         FLASHCLAW_MOCK_API: '1',
         FLASHCLAW_MOCK_RESPONSE_PREFIX: 'E2E',
         FLASHCLAW_MOCK_TOOL_MARKER: '[tool:send_message]',

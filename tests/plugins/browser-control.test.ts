@@ -244,7 +244,7 @@ describe('browser-control 插件全链路测试', () => {
 
       expect(result.success).toBe(true);
       expect(result.data.size).toBeGreaterThan(0);
-      expect(result.data.base64).toBeTruthy();
+      expect(result.data.hint).toContain('latest_screenshot');
       console.log('✅ 页面截图成功，大小:', result.data.size, 'bytes');
 
       // 验证文件是否创建

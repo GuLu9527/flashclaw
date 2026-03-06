@@ -197,12 +197,12 @@ apiRoutes.post('/chat', async (c) => {
   }
 });
 
-// 流式发送聊天消息
+// 流式发送聊天消息（NDJSON 协议：每行一个完整 JSON 对象，避免 chunk 边界问题）
 apiRoutes.post('/chat/stream', async (c) => {
   try {
     const body = await c.req.json();
     const message = body.message;
-    const group = body.group || 'main';  // 支持 CLI 传递的 group 参数
+    const group = body.group || 'main';
 
     if (!message || typeof message !== 'string') {
       return c.json({ success: false, error: '消息内容不能为空' }, 400);
@@ -211,31 +211,35 @@ apiRoutes.post('/chat/stream', async (c) => {
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
       start(controller) {
-        const write = (chunk: string) => {
-          controller.enqueue(encoder.encode(chunk));
+        // NDJSON 事件发送：每个事件为独立的一行 JSON
+        const sendEvent = (event: { type: string; data: unknown }) => {
+          controller.enqueue(encoder.encode(JSON.stringify(event) + '\n'));
         };
 
-        // 工具调用回调：通过特殊格式发送
+        const onToken = (chunk: string) => {
+          sendEvent({ type: 'token', data: chunk });
+        };
+
         const onToolUse = (toolName: string, input: unknown) => {
-          const toolInfo = JSON.stringify({ name: toolName, input });
-          write(`\n[TOOL:${toolInfo}]\n`);
+          sendEvent({ type: 'tool', data: { name: toolName, input } });
         };
 
-        const onMetrics = (metrics: { durationMs: number; model: string; usage?: { inputTokens: number; outputTokens: number } }) => {
-          const payload = {
-            durationMs: metrics.durationMs,
-            model: metrics.model,
-            inputTokens: metrics.usage?.inputTokens ?? null,
-            outputTokens: metrics.usage?.outputTokens ?? null,
-          };
-          write(`\n[METRICS:${JSON.stringify(payload)}]\n`);
+        const onThinking = (text: string) => {
+          sendEvent({ type: 'thinking', data: text });
         };
 
-        sendMessageStream(message.trim(), group, write, onToolUse, onMetrics)
-          .then(() => controller.close())
+        const onMetrics = (metrics: { durationMs: number; model: string; inputTokens: number | null; outputTokens: number | null }) => {
+          sendEvent({ type: 'metrics', data: metrics });
+        };
+
+        sendMessageStream(message.trim(), { group, onToken, onToolUse, onThinking, onMetrics })
+          .then(() => {
+            sendEvent({ type: 'done', data: null });
+            controller.close();
+          })
           .catch((error) => {
             const errMsg = error instanceof Error ? error.message : '发送失败';
-            write(`\n\n错误: ${errMsg}`);
+            sendEvent({ type: 'error', data: errMsg });
             controller.close();
           });
       },
@@ -243,7 +247,7 @@ apiRoutes.post('/chat/stream', async (c) => {
 
     return new Response(stream, {
       headers: {
-        'Content-Type': 'text/plain; charset=utf-8',
+        'Content-Type': 'application/x-ndjson; charset=utf-8',
         'Cache-Control': 'no-cache',
         'X-Accel-Buffering': 'no',
       },

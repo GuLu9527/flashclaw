@@ -16,13 +16,17 @@ export class ChannelManager {
   async initialize(): Promise<void> {
     this.channels = pluginManager.getActiveChannels();
     this.enabledPlatforms = this.channels.map(c => c.name);
-    
+
     if (this.channels.length === 0) {
-      throw new Error('没有启用任何通讯渠道');
+      logger.info('未启用任何通讯渠道，将以无渠道模式继续启动');
     }
   }
-  
+
   async start(onMessage: MessageHandler): Promise<void> {
+    if (this.channels.length === 0) {
+      return;
+    }
+
     for (const channel of this.channels) {
       channel.onMessage(onMessage);
       await channel.start();

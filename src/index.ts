@@ -1122,11 +1122,12 @@ async function processTaskIpc(
 
 // ==================== 启动横幅 ====================
 function displayBanner(enabledPlatforms: string[], skippedPlugins: number): void {
-  const platformsDisplay = enabledPlatforms.map(p => channelManager.getPlatformDisplayName(p)).join(' | ');
+  const platformsDisplay = enabledPlatforms.length > 0
+    ? enabledPlatforms.map(p => channelManager.getPlatformDisplayName(p)).join(' | ')
+    : '无';
   const stats = pluginManager.getStats();
   const provider = pluginManager.getProvider();
   const modelDisplay = provider ? `${provider.name} / ${getCurrentModelId()}` : 'none';
-  const cliPort = process.env.CLI_PORT || '3001';
   const skippedLabel = skippedPlugins > 0 ? `\x1b[90m，跳过 ${skippedPlugins}\x1b[0m` : '';
   
   const banner = `
@@ -1143,7 +1144,6 @@ function displayBanner(enabledPlatforms: string[], skippedPlugins: number): void
   \x1b[32m✓\x1b[0m 模型: \x1b[33m${modelDisplay}\x1b[0m
   \x1b[32m✓\x1b[0m 插件: \x1b[36m${stats.total} 个已加载\x1b[0m\x1b[90m（工具 ${stats.tools} | 渠道 ${stats.channels} | Provider ${stats.providers}）\x1b[0m${skippedLabel}
   \x1b[32m✓\x1b[0m 平台: \x1b[36m${platformsDisplay}\x1b[0m
-  \x1b[32m✓\x1b[0m CLI:  \x1b[36mhttp://127.0.0.1:${cliPort}\x1b[0m\x1b[90m  ← flashclaw cli\x1b[0m
   \x1b[32m✓\x1b[0m Web:  \x1b[36mhttp://127.0.0.1:${process.env.WEBUI_PORT || '3000'}\x1b[0m\x1b[90m  ← Web UI\x1b[0m
 
   \x1b[90m按 Ctrl+C 停止服务\x1b[0m
@@ -1289,30 +1289,7 @@ ${envExists
 
   // 初始化渠道管理器
   channelManager = new ChannelManager();
-  try {
-    await channelManager.initialize();
-  } catch (err) {
-    console.error(`
-\x1b[31m
-  ███████╗██████╗ ██████╗  ██████╗ ██████╗ 
-  ██╔════╝██╔══██╗██╔══██╗██╔═══██╗██╔══██╗
-  █████╗  ██████╔╝██████╔╝██║   ██║██████╔╝
-  ██╔══╝  ██╔══██╗██╔══██╗██║   ██║██╔══██╗
-  ███████╗██║  ██║██║  ██║╚██████╔╝██║  ██║
-  ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝
-\x1b[0m
-  \x1b[31m✗ 没有可用的消息渠道\x1b[0m
-
-  需要至少启用一个渠道插件，请检查:
-  1. 渠道插件是否已安装并启用
-  2. 对应的环境变量是否已在 \x1b[33m.env\x1b[0m 中配置
-
-  \x1b[33mflashclaw init\x1b[0m                    交互式配置
-  \x1b[33mflashclaw plugins list --available\x1b[0m  查看可安装的渠道插件
-  \x1b[33mflashclaw doctor\x1b[0m                   诊断配置问题
-`);
-    process.exit(1);
-  }
+  await channelManager.initialize();
 
   const enabledPlatforms = channelManager.getEnabledPlatforms();
   logger.debug({ platforms: enabledPlatforms }, '⚡ 渠道管理器已初始化');

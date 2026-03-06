@@ -53,7 +53,7 @@ npm run typecheck
 # 使用 CLI
 npx tsx src/cli.ts init      # 交互式初始化
 npx tsx src/cli.ts doctor    # 环境诊断
-npm run cli -- status
+npx tsx src/cli.ts help
 ```
 
 ---
@@ -102,9 +102,8 @@ flashclaw/
 │       ├── installer.ts      # 插件安装器
 │       └── types.ts          # 插件类型定义
 │
-├── plugins/                   # 内置插件（10个）
+├── plugins/                   # 内置插件（9个）
 │   ├── anthropic-provider/   # Anthropic AI Provider（默认）
-│   ├── cli-channel/          # CLI 终端渠道
 │   ├── send-message/         # 发送消息工具
 │   ├── schedule-task/        # 创建定时任务
 │   ├── list-tasks/           # 列出定时任务

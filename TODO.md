@@ -16,12 +16,12 @@
 
 ### 0.5 渠道架构解耦（重新设计）
 
-当前问题：CLI 渠道通过 web-ui 的 HTTP API 与核心通信，导致渠道之间存在耦合。
+当前问题：旧终端渠道曾通过 web-ui 的 HTTP API 与核心通信，导致渠道之间存在耦合。
 
 **目标架构：**
 ```
 ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-│   CLI 渠道    │  │  飞书渠道    │  │ Telegram 渠道 │
+│  终端渠道(旧)  │  │  飞书渠道    │  │ Telegram 渠道 │
 └───────┬──────┘  └───────┬──────┘  └───────┬──────┘
         │                │                │
         └────────┬───────┘                │
@@ -39,17 +39,109 @@
 - [x] 新增 `src/core-api.ts` — 统一接口：`chat()` / `getStatus()` / `getHistory()` / `clearSession()` / `compactSession()` 等
 - [x] 修改 `src/index.ts` — 启动时初始化 core-api，注入依赖，暴露 `global.__flashclaw_core_api`
 
-**Phase 2：改造 CLI（已完成）**
-- [x] 改造 `plugins/cli-channel/index.ts` — 从空壳改为真正的 HTTP 渠道插件（端口 3001），通过 core-api 处理消息
-- [x] 修改 `src/cli.ts` — CLI 客户端默认连接 cli-channel（端口 3001），不再依赖 web-ui
-- [x] 新增 `src/cli-ink.tsx` — 使用 React + Ink 重写终端 UI
+**Phase 2：改造 CLI（已取消，已移除）**
+- [x] 已移除独立 HTTP CLI 渠道 — 不再维护单独的终端通信插件
+- [x] 已移除旧 CLI 对话命令入口 — 终端对话渠道不再作为产品能力提供
+- [x] 已删除独立终端 UI — React + Ink 方案已下线
 
 **Phase 3：改造 web-ui（消除 global 依赖）**
-- [ ] 修改 `web-ui/server/services/chat.ts` — 从直接读 `global.__flashclaw_run_agent` 改为调用 core-api
-- [ ] 修改 `web-ui/server/services/status.ts` — 从直接读 global 改为调用 core-api
+- [x] 修改 `web-ui/server/services/chat.ts` — 从直接读 `global.__flashclaw_run_agent` 改为调用 core-api（新增 onThinking 回调）
+- [x] 修改 `web-ui/server/services/status.ts` — 从直接读 global 改为调用 core-api
+- [x] 修改 `web-ui/server/routes/api.ts` — 流式路由增加 onThinking 透传
+- [ ] 修改 `web-ui/server/services/tasks.ts` — 仍用 global DB（需 core-api 扩展 pause/resume/delete）
+- [ ] 修改 `web-ui/server/services/plugins.ts` — 仍用 global + 文件系统（低优先）
 
 **Phase 4：清理**
 - [ ] 减少 `global.__flashclaw_*` 变量 — 只保留 `global.__flashclaw_core_api`，其他通过它访问
+
+**Phase 5：Web UI 状态看板深化（参考 Star Office UI / Pixel Agents / AgentOffice）**
+
+> 前端已迁移到 React + Vite + Tailwind（`community-plugins/web-ui/frontend/`）
+
+**5.1 像素办公室增强（需要素材）**
+- [ ] 龙虾精灵帧动画 — 替换 emoji，用精灵图实现 idle/work/think/error 帧动画
+- [ ] 办公室场景背景 — 替换网格背景，用像素画俯视办公室（800×400px 或 32×32 瓷砖拼图）
+- [ ] 家具装饰 — 桌子、电脑、书架、咖啡机、服务器等场景元素
+- [ ] 区域地图 — 5 个功能区域（休息/思考/工作/Bug/会议）有明确视觉边界
+
+**5.2 实时状态系统（纯代码）**
+- [ ] SSE 实时推送 — 新增 `/sse/agent-state` 端点，替换轮询，状态变化即时推送
+- [ ] 状态机扩展 — 精确追踪 agent 生命周期: idle→thinking→tool_use→responding→error
+- [ ] 气泡实时更新 — 显示当前正在处理的消息内容/使用的工具名称
+- [ ] 位置平滑移动 — CSS transition + 缓动函数，龙虾在区域间移动
+
+**5.3 每日小记 & 记忆（纯代码）**
+- [ ] 今日/昨日小记 — 从 memory 插件 `data/memory/daily/` 读取展示
+- [ ] 记忆时间线 — 展示最近保存的长期记忆条目
+- [ ] 对话统计 — 今日对话数、token 消耗、工具调用次数
+
+**5.4 渠道状态可视化（纯代码）**
+- [ ] 渠道连接状态 — 飞书 ✅ / Telegram ❌ / Web UI ✅
+- [ ] 渠道图标/角色 — 每个渠道一个小角色在办公室场景中（可选素材或 emoji）
+- [ ] 最近消息来源 — 显示最后一条消息来自哪个渠道
+
+**5.5 多 Agent 协作（参考 OpenClaw 架构）**
+
+> OpenClaw 模式：Coordinator（任务分解） → 专业 Agent（执行） → 消息总线通信
+
+- [ ] **Agent 注册表** — `agents/` 目录管理，每个 Agent 有独立配置（id/name/role/model/tools/systemPrompt）
+- [ ] **Coordinator Agent** — 主 Agent 负责理解用户需求、分解任务、分发到专业 Agent
+- [ ] **消息总线** — Agent 之间通过 `agent_send` 工具通信（publish/subscribe + 超时等待）
+- [ ] **Agent 生命周期** — 启动/停止/状态查询，每个 Agent 独立的上下文和记忆
+- [ ] **工具白名单** — 每个 Agent 只能使用指定的工具子集，减少 token 消耗
+- [ ] **可视化看板** — 办公室场景中每个 Agent 是一个独立角色，实时显示状态/任务/气泡
+- [ ] **任务看板** — Trello 风格的任务卡片流转（待办→进行中→完成）
+- [ ] **协作动画** — Agent 之间传递任务的视觉效果（连线/箭头/消息飞行）
+
+**5.6 活动时间线（纯代码）**
+- [ ] 实时活动流 — 消息收发、工具调用、任务执行、Agent 通信的时间线
+- [ ] 活动图标 — 不同类型活动用不同图标/颜色
+- [ ] 可点击详情 — 点击活动条目展开详细信息
+
+**5.7 Agent 进阶（参考 Claw-Empire / AgentOffice）**
+- [ ] **Agent 性格系统** — 每个 Agent 有独立 SOUL.md 人格文件，影响气泡对话和行为风格
+- [ ] **动态招聘** — Coordinator Agent 根据任务需要自动创建新的专业 Agent（`hire_agent` 工具）
+- [ ] **经验值 & 等级** — Agent 完成任务获得经验，升级后解锁更多工具/能力（持久化到 DB）
+- [ ] **Agent 聚焦模式** — 点击角色后镜头跟随，显示详细信息面板（工具调用历史、记忆、统计）
+- [ ] **Agent 之间对话气泡** — Agent 通信时在场景中实时显示消息气泡动画
+- [ ] **会议系统** — Agent 之间开会讨论任务分配，生成会议纪要保存到记忆
+- [ ] **技能库** — 可浏览和分配 Agent 技能（对应 FlashClaw 的工具插件白名单）
+
+**5.8 场景 & 主题（需要素材 + 部分代码）**
+- [ ] **Office Pack 模板** — 不同工作模式（开发/研究/写作）自动切换场景布局和 Agent 配置
+- [ ] **AI 生成背景** — 接入生图 API，用户可自定义/生成办公室背景
+- [ ] **暗色/亮色主题** — 深色像素风 vs 浅色像素风切换
+- [ ] **区域自定义** — 用户可编辑办公室区域划分和名称
+
+**5.9 通用增强**
+- [ ] **多语言 i18n** — CN/EN 界面语言切换
+- [ ] **移动端适配** — 响应式布局，手机端可查看状态看板
+- [ ] **CEO 指令系统** — `$` 前缀命令直接对 Agent 下达高优先级指令
+- [ ] **报告生成** — Agent 完成任务后可生成可视化报告（Markdown/HTML）
+- [ ] **Kanban 拖拽** — 任务看板支持拖拽排序和状态变更
+
+**素材收集清单：**
+
+| 素材 | 规格 | 帧数 | 说明 |
+|------|------|------|------|
+| 龙虾 idle | 32×32 px/帧 | 4帧 | 待命，轻微呼吸动画 |
+| 龙虾 working | 32×32 px/帧 | 4帧 | 工作，敲键盘 |
+| 龙虾 thinking | 32×32 px/帧 | 4帧 | 思考，挠头/看书 |
+| 龙虾 running | 32×32 px/帧 | 6帧 | 移动，走路 |
+| 龙虾 error | 32×32 px/帧 | 4帧 | 异常，冒烟/晕 |
+| 龙虾 celebrating | 32×32 px/帧 | 4帧 | 成功，举手/闪光 |
+| 办公室全景 | 800×400 px | 1张 | 俯视像素办公室含5区域 |
+| 电脑桌 | 48×48 px | 1张 | 工作区 |
+| 咖啡机 | 32×32 px | 1张 | 休息区 |
+| 书架 | 32×48 px | 1张 | 思考区 |
+| 服务器 | 32×48 px | 1张 | 工具区 |
+| 警示牌 | 32×32 px | 1张 | Bug 区 |
+| 渠道角色 (飞书/TG/Web) | 24×24 px | 各1张 | 渠道小角色 |
+| Agent 角色 (多色) | 32×32 px/帧 | 4帧×N色 | 不同 Agent 不同颜色的龙虾 |
+
+> 精灵图格式：横排帧（如 idle 4帧 = 128×32 px），透明背景 PNG
+
+**执行优先级：** 5.2 (实时状态) → 5.3 (每日小记) → 5.6 (活动时间线) → 5.4 (渠道状态) → 5.5 (多Agent) → 5.1 (等素材后替换)
 
 ### 1. AI Provider 插件化完善
 - [x] ollama-provider - 本地 Ollama 支持 (通过 openai-provider 配置 OPENAI_BASE_URL=http://localhost:11434/v1)
@@ -92,29 +184,7 @@
 ## P2 - 完善功能
 
 ### 5. CLI REPL 增强
-- [x] 上下箭头历史浏览（cli-ink.tsx React + Ink）
-- [x] Tab 命令补全（cli-ink.tsx）
-- [~] Markdown 渲染（cli-ink.tsx）— 仅支持标题/引用/列表，缺失代码块/行内代码/加粗/斜体/链接
-- [x] 模型思考过程显示（Ctrl+T 折叠/展开）
-- [ ] 语音输入（macOS say）
-
-#### CLI Bug 修复清单（2026-03-04 Review）
-
-| 优先级 | 问题 | 根因 | 位置 | 状态 |
-|--------|------|------|------|------|
-| P0 | **Markdown 代码块未渲染** — `renderMarkdownLine` 只处理单行标记，完全缺失 ` ``` ` 代码块、行内代码 `` `code` ``、加粗 `**bold**`、斜体 `*italic*` | `renderMarkdownLine` 无代码块状态机，调用方也未维护多行状态 | `cli-ink.tsx:69-82`, `cli-ink.tsx:169-177` | 待修复 |
-| P0 | **二次对话不显示「接收中」Spinner** — 第二次发消息时 `receivedThinking` 仍为上次对话的 `true`，导致 `busy && !receivedThinking` 始终为 `false` | `setReceivedThinking(false)` 在 `fetch` 之后（行 427），应移到 `setBusy(true)` 之后、`fetch` 之前 | `cli-ink.tsx:409,427,565` | 已修复 |
-| P1 | **小模型 /no_think 下仍显示「思考中」** — Qwen3 `/no_think` 模式仍输出空 `<think>\n\n</think>`，状态机 yield 了空白 thinking 事件 | openai-provider 状态机 yield thinking 前未过滤纯空白内容 | `openai-provider/index.ts` 状态机 think 分支 | 待修复 |
-| P1 | **思考中括号内显示字数而非 token 数** — `msg.content.length` 是字符数，应改为 CJK/英文分段估算 token 数 | 直接用 `.length` 字符计数 | `cli-ink.tsx:127` | 待修复 |
-| P0 | **/new 可能清错会话（group 丢失）** — CLI 端调用 `/api/chat/clear` 未传 group，服务端默认清理 `main` | `/new` 请求体缺失 `group` 字段 | `cli-ink.tsx`, `plugins/cli-channel/index.ts` | 已修复 |
-| P0 | **命令提示与实现不一致** — UI 提示支持 `/status` `/history` `/compact`，但实际未实现 | slash 命令分支仅实现 `/new` `/clear` `/quit` | `cli-ink.tsx` | 已修复 |
-| P0 | **流式标记协议脆弱** — `[THINKING:...]` / `[TOOL:...]` / `[METRICS:...]` 在 chunk 边界或内容含 `]` 时易解析错误 | 文本内嵌协议 + 正则按 chunk 解析 | `plugins/cli-channel/index.ts`, `cli-ink.tsx` | 已修复 |
-| P0 | **二次对话 Spinner 丢失** — `setReceivedThinking(false)` 时机偏后，`busy && !receivedThinking` 可能被上轮状态污染 | 重置发生在 `fetch` 之后 | `cli-ink.tsx` | 已修复 |
-| P1 | **`flashclaw cli --url/--group` 参数无法生效** — 参数解析仅支持 boolean flag，导致 string 参数读取不到 | `parseArgs` 未解析 `--key=value` / `--key value` | `cli.ts` | 已修复 |
-| P1 | **流异常后可能残留 streaming 占位消息** | catch 分支未清理 `role=streaming` | `cli-ink.tsx` | 已修复 |
-| P1 | **CLI 渠道端口占用时缺少明确启动错误处理** | `server.listen` 无启动 error promise 化处理 | `plugins/cli-channel/index.ts` | 已修复 |
-| P1 | **上下文百分比显示可能超 100% 且模型切换时 context window 未同步** | 百分比未 clamp；流式 metrics 更新 model 后未更新 contextMax | `cli-ink.tsx` | 已修复 |
-| P1 | **`/new` 后状态栏上下文未刷新** — 服务端会话已清空，但前端 `contextUsed` 未重置，导致底部上下文条残留旧值 | `/new` 分支缺少 `setContextUsed(0)` | `src/cli-ink.tsx` | ✅ 已修复 |
+- [x] 已取消：CLI REPL 已整体移除，不再继续增强
 
 ### 6. 每日/每周报告
 - [ ] daily-report 工具插件
@@ -247,7 +317,7 @@
 
 | 优先级 | 问题 | 位置 | 状态 |
 |--------|------|------|------|
-| P0 | 多渠道回退可能吞消息 — 指定 `platform` 未命中时会回退到“任意渠道”；`cli-channel.sendMessage()` 无实际投递但返回 success，可能导致消息被错误判定为已发送（定时任务/IPC 无平台时风险更高） | `src/channel-manager.ts:33-45`, `plugins/cli-channel/index.ts:232-234`, `src/index.ts:1356`, `src/task-scheduler.ts:49` | ✅ 已修复 |
+| P0 | 多渠道回退可能吞消息 — 指定 `platform` 未命中时会回退到“任意渠道”；无实际投递的渠道如果误报 success，可能导致消息被错误判定为已发送（定时任务/IPC 无平台时风险更高） | `src/channel-manager.ts:33-45`, `src/index.ts:1356`, `src/task-scheduler.ts:49` | ✅ 已修复 |
 
 ### 🟡 P1 — 测试回归 / 契约不一致
 
@@ -273,19 +343,16 @@
 |--------|------|------|------|
 | P0 | 队列时间戳推进错误：批处理后仅推进到当前 `msg.timestamp`，可能重复处理同一批消息并重复回复 | `src/index.ts:324-328`, `src/index.ts:348-351`, `src/index.ts:411` | 待修复 |
 | P0 | `/new` 在未注册 group 场景可能“看起来成功但未真正清会话” | `src/core-api.ts:156-165`, `src/core-api.ts:289-298` | 待修复 |
-| P0 | `/compact` 在未注册 group 场景会“假成功”（`summary=null` 仍返回 success） | `src/core-api.ts:180-184`, `plugins/cli-channel/index.ts:203-205`, `src/cli-ink.tsx:474-478` | 待修复 |
+| P0 | `/compact` 在未注册 group 场景会“假成功”（`summary=null` 仍返回 success） | `src/core-api.ts:180-184` | 待修复 |
 
 ### 🟡 P1 — 稳定性 / 契约一致性
 
 | 优先级 | 问题 | 位置 | 状态 |
 |--------|------|------|------|
 | P1 | 任务超时后未取消原任务，可能出现“超时重试 + 原任务晚到副作用”双执行 | `src/task-scheduler.ts:245-247`, `src/task-scheduler.ts:319-362` | 待修复 |
-| P1 | CLI Channel 非法 JSON 返回 500，错误语义应为 400 | `plugins/cli-channel/index.ts:37-41`, `plugins/cli-channel/index.ts:210-213` | 待修复 |
-| P1 | CLI Channel 请求体无大小限制，超大请求可能造成内存压力 | `plugins/cli-channel/index.ts:34-35` | 待修复 |
 | P1 | Feishu `sendImage()` 失败路径未清理临时文件，可能累积到 `/tmp` | `community-plugins/feishu/index.ts:414-417`, `community-plugins/feishu/index.ts:426-428`, `community-plugins/feishu/index.ts:467-470` | 待修复 |
-| P1 | Web UI 聊天历史参数错位：`getChatHistory(50)` 把 `50` 当 group 使用 | `community-plugins/web-ui/server/routes/pages.ts:124`, `community-plugins/web-ui/server/services/chat.ts:65` | 待修复 |
-| P1 | Web UI 流式协议与渲染契约不一致：`[TOOL]`/`[METRICS]` 会污染 assistant 文本 | `community-plugins/web-ui/server/routes/api.ts:221`, `community-plugins/web-ui/server/routes/api.ts:231`, `community-plugins/web-ui/server/routes/pages.ts:279-282` | 待修复 |
-| P1 | CLI 输入历史“上下箭头浏览”当前实现缺失，但 TODO 标记为已完成 | `src/cli-ink.tsx:230-251`, `src/cli-ink.tsx:336-345` | 待修复 |
+| P1 | Web UI 聊天历史参数错位：`getChatHistory(50)` 把 `50` 当 group 使用 | `community-plugins/web-ui/server/routes/pages.ts:124`, `community-plugins/web-ui/server/services/chat.ts:75` | ✅ 已修复 |
+| P1 | Web UI 流式协议与渲染契约不一致：工具/指标事件与 assistant 文本混流 | `community-plugins/web-ui/server/routes/api.ts:223-232`, `community-plugins/web-ui/server/routes/pages.ts:275-314` | ✅ 已修复 |
 | P1 | 记忆插件默认 scope 仍偏向分组语义，不符合“跨渠道同一 FlashClaw”预期 | `plugins/memory/index.ts`, `src/core/memory.ts` | ✅ 已修复 |
 | P1 | memory/memory-vector 插件通过类型断言访问私有配置（`mm as unknown as { config }`） | `plugins/memory/index.ts`, `community-plugins/memory-vector/index.ts` | ✅ 已修复 |
 | P2 | 记忆文件写入缺少原子写，异常中断时可能导致文件不完整 | `src/core/memory.ts` | ✅ 已修复 |
@@ -433,7 +500,7 @@
 - [x] Telegram - 已完成 (v1.4.0)
 - [ ] Slack - 中优先级
 - [ ] Discord - 低优先级
-- [x] CLI 终端交互 - 无需外部平台 (已完成: flashclaw cli)
+- [x] CLI 终端交互 - 已下线，不再维护独立 CLI 渠道
 
 ---
 
