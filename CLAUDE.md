@@ -196,24 +196,28 @@ src/                    # 核心代码（尽量不动）
 │   └── retry.ts
 └── ...
 
-plugins/                # 内置插件（9个）
+plugins/                # 核心插件（3个，系统运行必需）
 ├── anthropic-provider/ # Anthropic AI Provider（默认）
-├── schedule-task/      # 定时任务工具
+├── memory/             # 记忆工具（remember/recall/log）
+└── send-message/       # 发送消息工具
+
+community-plugins/      # 社区/官方扩展插件（按需加载）
+├── feishu/             # 飞书渠道
+├── telegram/           # Telegram 渠道
+├── openai-provider/    # OpenAI/Ollama Provider
+├── schedule-task/      # 定时任务
 ├── list-tasks/         # 查看任务列表
 ├── cancel-task/        # 取消任务
 ├── pause-task/         # 暂停任务
 ├── resume-task/        # 恢复任务
-├── memory/             # 记忆工具（remember/recall/log）
-├── send-message/       # 发送消息工具
-└── register-group/     # 注册群组
-
-community-plugins/      # 社区/官方扩展插件
-├── feishu/             # 飞书渠道
-├── telegram/           # Telegram 渠道
-├── openai-provider/    # OpenAI/Ollama Provider
+├── register-group/     # 注册群组
 ├── memory-vector/      # 语义记忆搜索（Ollama embedding）
+├── web-fetch/          # 网页抓取
+├── web-search/         # 互联网搜索（DuckDuckGo，代理支持）
+├── local-file-read/    # 本地文件读取 + 目录列表
+├── reminder/           # 简化版定时提醒
+├── agent-manager/      # 多 Agent 注册表（路由、白名单、agent_send）
 ├── hello-world/        # 测试插件
-├── web-fetch/          # 网页抓取插件
 ├── browser-control/    # 浏览器自动化控制 (Playwright)
 └── web-ui/             # Web 管理界面
 ```
@@ -258,6 +262,7 @@ community-plugins/      # 社区/官方扩展插件
 BOT_NAME=FlashClaw              # 机器人名称
 LOG_LEVEL=info                  # 日志级别
 AGENT_TIMEOUT=300000            # Agent 超时（毫秒）
+REACT_MAX_ROUNDS=10            # ReAct 工具调用链最大轮数
 ```
 
 ### AI 配置

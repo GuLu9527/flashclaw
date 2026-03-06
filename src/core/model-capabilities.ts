@@ -39,7 +39,8 @@ const MODEL_CAPABILITIES: ModelCapabilities[] = [
   
   // MiniMax 系列
   { pattern: /^abab/i, provider: 'minimax', input: ['text'], contextWindow: 200000 },
-  { pattern: /^minimax/i, provider: 'minimax', input: ['text'], contextWindow: 200000 },
+  { pattern: /^MiniMax-M2/i, provider: 'minimax', input: ['text'], contextWindow: 205000, reasoning: true },
+  { pattern: /^minimax/i, provider: 'minimax', input: ['text'], contextWindow: 205000 },
   
   // 智谱 GLM 系列
   { pattern: /^glm-4v/i, provider: 'zhipu', input: ['text', 'image'], contextWindow: 128000 },

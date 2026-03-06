@@ -1,0 +1,7 @@
+{
+  "name": "agent-manager",
+  "version": "1.0.0",
+  "type": "tool",
+  "description": "多 Agent 注册表 — 路由、白名单、配置管理",
+  "main": "index.ts"
+}

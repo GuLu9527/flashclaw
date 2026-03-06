@@ -74,8 +74,23 @@ export function getServiceStatus(): ServiceStatus {
  */
 export function getRecentActivity(limit = 10): RecentActivity[] {
   try {
+    // 从 DB 获取所有群组的最近消息，不再只看 main-chat
+    const db = (globalThis as Record<string, unknown>).__flashclaw_db as
+      | { prepare: (sql: string) => { all: (...args: unknown[]) => Array<{ chat_jid: string; sender_name: string; content: string; timestamp: string }> } }
+      | undefined;
+    if (db) {
+      const rows = db.prepare(
+        'SELECT chat_jid, sender_name, content, timestamp FROM messages ORDER BY timestamp DESC LIMIT ?'
+      ).all(limit);
+      return rows.reverse().map(r => ({
+        time: formatTime(r.timestamp),
+        sender: r.sender_name,
+        content: r.content.slice(0, 50) + (r.content.length > 50 ? '...' : ''),
+        chatId: r.chat_jid,
+      }));
+    }
+    // 回退：仅从 main-chat 获取
     const api = getCoreApi();
-    // 从 main 群组获取最近消息作为活动
     const history = api.getHistory('main-chat', limit * 2);
     return history
       .map((m: { role: string; content: string; time?: string }) => ({

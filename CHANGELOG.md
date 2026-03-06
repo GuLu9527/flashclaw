@@ -7,16 +7,35 @@
 ## [Unreleased]
 
 ### 新增
-- **意图路由** — 根据用户消息关键词预筛选工具列表（记忆/定时/网页/群组等 7 类意图），小模型工具选择更精准；无匹配时回退全部工具（零误判）
+- **ReAct 自主循环** — 新增 `REACT_MAX_ROUNDS` 配置（默认 10），控制工具调用链深度上限
+- **web_search 工具插件** — 基于 DuckDuckGo 的互联网搜索，自动检测 HTTP_PROXY/HTTPS_PROXY 代理
+- **local_file_read 工具插件** — 本地文件读取 + 目录列表，带安全白名单（限用户主目录、禁敏感文件/目录）
+- **reminder 工具插件** — 简化版定时提醒，只需 message + time 两个参数，小模型更易使用
+- **agent-manager 插件** — 多 Agent 注册表（`~/.flashclaw/agents.json`），3 级路由匹配（peer → channel+group → channel → default），工具白名单，`agent_send` / `agent_list` 工具。核心代码零依赖，插件通过 global 暴露接口
+- **Web UI SSE 实时推送** — 新增 `/sse/agent-state` 端点替换状态轮询，状态变化即时推送（agent 状态 + 最近活动 + 气泡详情）
+- **Web UI 每日小记** — 新增 `/api/daily-note` API，DailyNote 组件展示今日/昨日日志（支持折叠昨日）
+- **Web UI 今日统计** — 新增 `/api/stats/today` API，状态看板新增今日消息数和今日会话数卡片
+- **Web UI 活动详情** — ActivityTimeline 支持点击展开详细信息（发送者、完整内容）
+- **Web UI 多会话支持** — 左侧会话列表，支持创建/切换/删除会话，每个会话独立上下文；后端新增 `/api/sessions` API
+- **Web UI 请求取消** — 发送中显示红色停止按钮，点击通过 `AbortController` 中断前端流 + 通知后端取消；新增 `/api/chat/cancel` API
+- **Web UI 实时更新增强** — 流式显示思考过程（可折叠/展开）、工具调用进度、请求指标（模型/耗时/token 用量）
+- **意图路由扩展** — 根据用户消息关键词预筛选工具列表（记忆/定时/搜索/网页/文件/群组等 9 类意图），小模型工具选择更精准；无匹配时回退全部工具（零误判）
 - **recall 自动检索** — "知道我是谁吗"等回忆类问题，代码层面自动调用 `memory_search` 并将结果注入系统提示词，不依赖模型主动调用工具
 - **thinking 支持** — Ollama 模型思考过程（`delta.reasoning`）流式传输到 CLI，Ctrl+T 折叠/展开
 - **CLI thinking UI** — 思考内容折叠显示字数、Ctrl+T 展开完整推理过程；Spinner 显示"接收中..."，收到 thinking 后自动消失
 
 ### 改进
+- **插件关闭超时保护** — `pluginManager.clear()` 中每个插件的 `stop()/cleanup()` 加 5 秒超时，防止关闭流程卡死
+- **Provider 错误诊断增强** — `anthropic-provider` 和 `openai-provider` 的 API 调用错误现在会展开完整的 `cause` 链，显示底层网络错误（DNS/TLS/HTTP 状态码等），替代泛化的 "Connection error."
 - **无渠道启动支持** — 删除 CLI 渠道后，`flashclaw start` 允许在未启用任何 channel 的情况下继续运行，保留 Web UI 访问入口
 - **CLI 底部状态栏精简** — 移除动态文字（思考中/接收中），只保留固定四项信息（群组/模型/上下文进度）
 
 ### 修复
+- **人格系统 SOUL.md 全面生效** — agents.json 的 `soul` 字段现在正确加载对应 SOUL 文件（3 级优先级：Agent 配置 → 会话级 → 全局）；有 SOUL.md 时跳过默认身份声明，避免名字冲突
+- **Agent 名字动态化** — 系统提示词中的 Agent 名字使用 `agents.json name` → `BOT_NAME` → `FlashClaw` 回退链，不再硬编码
+- **memory 插件 schema 歧义** — 示例改为 `user_name` / `ai_name` 前缀，帮助小模型区分用户信息和 AI 自身信息
+- **插件关闭卡死** — `pluginManager.clear()` 中每个插件的 `stop()/cleanup()` 加 5 秒超时，防止关闭流程永久挂起
+- **P0: Logs.tsx SSE 泄漏** — EventSource 在页面切换后未关闭，添加 `cancelled` 标志 + `AbortController` 防止竞态条件
 - **移除 CLI 渠道与终端入口** — 删除 `flashclaw cli`、`src/cli-ink.tsx` 与 `plugins/cli-channel`，避免重复维护独立终端通信链路
 - **handleToolUse 后续文本回传** — 工具调用后模型的后续回复现在正确通过 `onToken` 发送给 CLI，不再丢失
 - **工具调用参数显示** — OpenAI provider 流式 `tool_use` 事件改为流结束后发送完整 arguments（修复 CLI 显示逐字索引的问题）

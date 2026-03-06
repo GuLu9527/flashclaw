@@ -6,6 +6,7 @@
  */
 
 import pino from 'pino';
+import { listSouls, useSoul, resetSoul, getSoulSummary } from './soul-manager.js';
 
 const logger = pino({
   level: process.env.LOG_LEVEL || 'info',
@@ -20,6 +21,8 @@ export interface CommandContext {
   userId: string;
   userName: string;
   platform: string;
+  /** 群组文件夹名（用于 /soul 等需要群组上下文的命令） */
+  groupFolder?: string;
   /** 获取会话统计 */
   getSessionStats?: () => SessionStats | null;
   /** 重置会话 */
@@ -112,7 +115,12 @@ export function handleCommand(content: string, context: CommandContext): Command
       return handlePing();
 
     case 'compact':
-      return handleCompact(context);
+    case '压缩':
+      return handleCompact(context, args);
+
+    case 'soul':
+    case '人格':
+      return handleSoul(context, args);
 
     default:
       return {
@@ -134,6 +142,7 @@ function handleHelp(): CommandResult {
 \`/status\` - 查看会话状态
 \`/new\` - 重置当前会话
 \`/compact\` - 压缩会话上下文
+\`/soul\` - 查看/切换人格
 \`/tasks\` - 查看定时任务
 \`/ping\` - 测试机器人响应
 
@@ -285,9 +294,91 @@ function handlePing(): CommandResult {
 }
 
 /**
- * /compact - 压缩会话上下文
+ * /soul - 人格管理
  */
-function handleCompact(context: CommandContext): CommandResult {
+function handleSoul(context: CommandContext, args: string[]): CommandResult {
+  const subCommand = args[0]?.toLowerCase() || 'show';
+  const groupFolder = context.groupFolder;
+
+  if (!groupFolder) {
+    return {
+      isCommand: true,
+      shouldRespond: true,
+      response: `⚠️ 人格命令需要在会话中使用`
+    };
+  }
+
+  switch (subCommand) {
+    case 'list':
+    case 'ls': {
+      const souls = listSouls();
+      if (souls.length === 0) {
+        return {
+          isCommand: true,
+          shouldRespond: true,
+          response: `🎭 **可用人格**\n\n_暂无预置人格，请在 ~/.flashclaw/souls/ 中添加 .md 文件_`
+        };
+      }
+      let text = `🎭 **可用人格** (${souls.length}个)\n\n`;
+      for (const soul of souls) {
+        const builtinTag = soul.isBuiltin ? ' 📦' : '';
+        text += `• **${soul.name}** — ${soul.title}${builtinTag}\n`;
+      }
+      text += `\n使用 \`/soul use <name>\` 切换人格`;
+      return { isCommand: true, shouldRespond: true, response: text };
+    }
+
+    case 'use':
+    case 'switch': {
+      const soulName = args[1];
+      if (!soulName) {
+        return {
+          isCommand: true,
+          shouldRespond: true,
+          response: `⚠️ 请指定人格名称\n\n使用 \`/soul list\` 查看可用人格`
+        };
+      }
+      const success = useSoul(groupFolder, soulName);
+      if (success) {
+        return {
+          isCommand: true,
+          shouldRespond: true,
+          response: `✅ **人格已切换为 "${soulName}"**\n\n新人格将从下一条消息开始生效。`
+        };
+      }
+      return {
+        isCommand: true,
+        shouldRespond: true,
+        response: `❌ 未找到人格 "${soulName}"\n\n使用 \`/soul list\` 查看可用人格`
+      };
+    }
+
+    case 'reset': {
+      resetSoul(groupFolder);
+      return {
+        isCommand: true,
+        shouldRespond: true,
+        response: `✅ **会话人格已重置**\n\n已恢复为全局人格设定。`
+      };
+    }
+
+    case 'show':
+    default: {
+      const summary = getSoulSummary(groupFolder);
+      return {
+        isCommand: true,
+        shouldRespond: true,
+        response: `🎭 **当前人格**\n\n${summary}`
+      };
+    }
+  }
+}
+
+/**
+ * /compact - 压缩会话上下文
+ * /compact fast - 规则摘要模式（不调用 AI，适合小模型）
+ */
+function handleCompact(context: CommandContext, args: string[]): CommandResult {
   if (!context.compactSession) {
     return {
       isCommand: true,
@@ -296,8 +387,16 @@ function handleCompact(context: CommandContext): CommandResult {
     };
   }
 
-  // 返回一个立即响应，实际压缩在后台进行
-  // 压缩完成后会发送另一条消息
+  const isFastMode = args.length > 0 && ['fast', 'quick', 'rule', '快速'].includes(args[0].toLowerCase());
+
+  if (isFastMode) {
+    return {
+      isCommand: true,
+      shouldRespond: true,
+      response: `⏳ **快速压缩中...**（规则模式，不调用 AI）`
+    };
+  }
+
   return {
     isCommand: true,
     shouldRespond: true,

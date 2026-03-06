@@ -100,6 +100,13 @@ export const paths = {
   groups(): string {
     return join(getFlashClawHome(), 'groups');
   },
+
+  /**
+   * Souls directory (~/.flashclaw/souls)
+   */
+  souls(): string {
+    return join(getFlashClawHome(), 'souls');
+  },
 };
 
 /**
@@ -144,6 +151,7 @@ export function ensureDirectories(): void {
     paths.logs(),
     paths.userPlugins(),
     paths.groups(),
+    paths.souls(),
   ];
 
   for (const dir of directories) {

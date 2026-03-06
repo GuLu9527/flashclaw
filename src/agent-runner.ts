@@ -15,6 +15,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 import {
   AGENT_TIMEOUT,
   AI_MAX_OUTPUT_TOKENS,
+  BOT_NAME,
   TIMEZONE
 } from './config.js';
 import { paths } from './paths.js';
@@ -27,6 +28,8 @@ import { ToolContext, ToolResult as PluginToolResult } from './plugins/types.js'
 import { recordTokenUsage, checkCompactThreshold } from './session-tracker.js';
 import { createLogger } from './logger.js';
 import { checkContextSafety } from './core/context-guard.js';
+import { normalizeToolParams } from './tool-params.js';
+import type { MultiAgentConfig } from './types.js';
 
 const logger = createLogger('AgentRunner');
 
@@ -167,7 +170,7 @@ const INTENT_ROUTES: IntentRoute[] = [
   {
     label: 'schedule',
     pattern: /(?:提醒|闹钟|定时|每天|每周|每月|每隔|cron|schedule|remind|timer|(\d+)\s*(?:秒|分钟|小时|天)后)/i,
-    tools: ['schedule_task', 'list_tasks', 'cancel_task', 'pause_task', 'resume_task'],
+    tools: ['schedule_task', 'reminder', 'list_tasks', 'cancel_task', 'pause_task', 'resume_task'],
   },
   {
     label: 'tasks',
@@ -175,9 +178,19 @@ const INTENT_ROUTES: IntentRoute[] = [
     tools: ['list_tasks', 'cancel_task', 'pause_task', 'resume_task', 'schedule_task'],
   },
   {
+    label: 'search',
+    pattern: /(?:搜索|搜一下|查一下|查询|search|google|百度|查找信息|最新.*消息|新闻)/i,
+    tools: ['web_search', 'web_fetch'],
+  },
+  {
     label: 'web',
     pattern: /(?:抓取|网页|网站|链接|fetch|http|www\.|\.com|\.cn|\.org|浏览器|截图|打开.*网)/i,
-    tools: ['web_fetch', 'browser_launch', 'browser_snapshot', 'browser_action', 'browser_tabs', 'browser_storage'],
+    tools: ['web_fetch', 'web_search', 'browser_launch', 'browser_snapshot', 'browser_action', 'browser_tabs', 'browser_storage'],
+  },
+  {
+    label: 'file',
+    pattern: /(?:读取文件|查看文件|打开文件|文件内容|read.*file|cat\s|看看.*文件|列出.*目录|目录.*列表)/i,
+    tools: ['local_file_read', 'local_list_dir'],
   },
   {
     label: 'group',
@@ -265,7 +278,9 @@ export function createToolExecutor(ctx: IpcContext, memoryManager: MemoryManager
   };
 
   return async (name: string, params: unknown): Promise<ToolResult> => {
-    logger.info({ tool: name, params }, '⚡ 执行工具');
+    // 工具参数后处理：自动修正小模型常见的格式错误
+    const normalizedParams = normalizeToolParams(name, params);
+    logger.info({ tool: name, params: normalizedParams }, '⚡ 执行工具');
 
     // 使用插件工具
     const toolInfo = pluginManager.getTool(name);
@@ -275,8 +290,8 @@ export function createToolExecutor(ctx: IpcContext, memoryManager: MemoryManager
         // 多工具插件：execute(toolName, params, context)
         // 单工具插件：execute(params, context)
         const result = isMultiTool
-          ? await plugin.execute(name, params, pluginContext)
-          : await plugin.execute(params, pluginContext);
+          ? await plugin.execute(name, normalizedParams, pluginContext)
+          : await plugin.execute(normalizedParams, pluginContext);
         logger.info({ tool: name, success: result.success, error: result.error }, '⚡ 插件执行结果');
         if (result.success) {
           return { 
@@ -366,7 +381,7 @@ async function sleep(ms: number): Promise<void> {
 /**
  * 获取群组的系统提示词
  */
-function getGroupSystemPrompt(group: RegisteredGroup, userId: string, isMain: boolean, isScheduledTask?: boolean): string {
+function getGroupSystemPrompt(group: RegisteredGroup, userId: string, isMain: boolean, isScheduledTask?: boolean, intent?: string | null, agentName?: string, agentSoul?: string): string {
   const memoryManager = getMemoryManager();
   
   // 获取当前时间（用于定时任务等需要时间计算的场景）
@@ -379,19 +394,42 @@ function getGroupSystemPrompt(group: RegisteredGroup, userId: string, isMain: bo
   const claudeMdPath = path.join(groupDir, 'CLAUDE.md');
   let basePrompt = '';
   
-  // 读取 SOUL.md 人格设定（会话级优先于全局）
+  // 读取 SOUL.md 人格设定（优先级：Agent 配置 → 会话级 → 全局）
   let soulContent = '';
   const soulSessionPath = path.join(groupDir, 'SOUL.md');
   const soulGlobalPath = path.join(paths.home(), 'SOUL.md');
   
-  if (fs.existsSync(soulSessionPath)) {
+  // 优先从 agent-manager 路由结果的 soul 路径加载（如 "souls/serious.md"）
+  if (agentSoul) {
+    const soulPaths = [
+      path.join(paths.home(), agentSoul),     // ~/.flashclaw/souls/serious.md
+      path.join(paths.souls(), path.basename(agentSoul)), // ~/.flashclaw/souls/serious.md (basename)
+    ];
+    for (const sp of soulPaths) {
+      if (fs.existsSync(sp)) {
+        try {
+          soulContent = fs.readFileSync(sp, 'utf-8').trim();
+          logger.debug({ path: sp, agentSoul }, '加载 Agent 配置的 SOUL');
+          break;
+        } catch (err) {
+          logger.debug({ path: sp, err }, '加载 Agent SOUL 失败');
+        }
+      }
+    }
+  }
+  
+  // 回退：会话级 SOUL.md
+  if (!soulContent && fs.existsSync(soulSessionPath)) {
     try {
       soulContent = fs.readFileSync(soulSessionPath, 'utf-8').trim();
       logger.debug({ path: soulSessionPath }, '加载会话级 SOUL.md');
     } catch (err) {
       logger.debug({ path: soulSessionPath, err }, '加载会话级 SOUL.md 失败');
     }
-  } else if (fs.existsSync(soulGlobalPath)) {
+  }
+  
+  // 回退：全局 SOUL.md
+  if (!soulContent && fs.existsSync(soulGlobalPath)) {
     try {
       soulContent = fs.readFileSync(soulGlobalPath, 'utf-8').trim();
       logger.debug({ path: soulGlobalPath }, '加载全局 SOUL.md');
@@ -412,15 +450,33 @@ function getGroupSystemPrompt(group: RegisteredGroup, userId: string, isMain: bo
     soulPrefix = `\n\n## 人格设定\n\n请完全按照以下人格设定来回复：\n\n${soulContent}\n\n`;
   }
   
+  // 读取 USER.md 用户自我介绍（全局）
+  let userMdContent = '';
+  const userMdPath = path.join(paths.home(), 'USER.md');
+  if (fs.existsSync(userMdPath)) {
+    try {
+      userMdContent = fs.readFileSync(userMdPath, 'utf-8').trim();
+    } catch (err) {
+      logger.debug({ path: userMdPath, err }, '加载 USER.md 失败');
+    }
+  }
+  
   if (fs.existsSync(claudeMdPath)) {
     // 用户自定义提示词，追加时间和工具信息
     basePrompt = fs.readFileSync(claudeMdPath, 'utf-8');
     basePrompt += `\n\n---\n当前时间: ${currentTimeLocal}\n当前 ISO 时间: ${currentTimeISO}\n时区: ${TIMEZONE}`;
   } else {
-    // 默认系统提示词
-    basePrompt = `你是 FlashClaw，一个智能助手。
+    // 默认系统提示词（按意图动态裁剪，减少小模型上下文占用）
+    const needsScheduleHint = !intent || intent === 'schedule';
+    const needsScreenshotHint = !intent || intent === 'web';
     
-你正在 "${group.name}" 群组中与用户交流。
+    const displayName = agentName || BOT_NAME;
+    // 如果有 SOUL.md，身份由 SOUL.md 定义，不再注入默认身份声明
+    const identityLine = soulContent
+      ? ''
+      : `你是 ${displayName}，一个智能助手。\n\n`;
+
+    let promptSections = `${identityLine}你正在 "${group.name}" 群组中与用户交流。
 
 ## 当前时间
 - 本地时间: ${currentTimeLocal}
@@ -429,7 +485,10 @@ function getGroupSystemPrompt(group: RegisteredGroup, userId: string, isMain: bo
 
 ## 工具使用原则
 - 优先直接回答用户问题。
-- 只有在需要外部操作（如发送消息、浏览器操作、网络抓取、任务管理）时才调用工具。
+- 只有在需要外部操作时才调用工具。`;
+
+    if (needsScreenshotHint) {
+      promptSections += `
 
 ## 发送截图（重要！）
 截图后必须使用 send_message 工具发送给用户：
@@ -438,7 +497,11 @@ send_message({ image: "latest_screenshot", caption: "可选的说明文字" })
 \`\`\`
 - 先用 browser_action screenshot 截图
 - 然后用 send_message image="latest_screenshot" 发送
-- 不要只描述截图，要实际发送！
+- 不要只描述截图，要实际发送！`;
+    }
+
+    if (needsScheduleHint) {
+      promptSections += `
 
 ## schedule_task 时间计算（重要！）
 创建一次性任务时，scheduleValue 必须使用 ISO 8601 格式。
@@ -448,15 +511,29 @@ send_message({ image: "latest_screenshot", caption: "可选的说明文字" })
 - 1分钟后 = ${in1Minute}
 - 5分钟后 = ${in5Minutes}
 
-对于其他时间，按比例估算即可。例如20秒后约在10秒和30秒之间。
+对于其他时间，按比例估算即可。例如20秒后约在10秒和30秒之间。`;
+    }
+
+    promptSections += `
 
 请用中文回复，除非用户使用其他语言。
 保持回复简洁、有帮助。`;
+
+    basePrompt = promptSections;
+    
+    if (intent) {
+      logger.debug({ intent, needsScheduleHint, needsScreenshotHint }, '🎯 系统提示词按意图裁剪');
+    }
   }
   
   // 将 SOUL.md 人格设定注入到 basePrompt 最前面
   if (soulPrefix) {
     basePrompt = soulPrefix + basePrompt;
+  }
+  
+  // 注入 USER.md 用户自我介绍（在 SOUL 之后、记忆之前）
+  if (userMdContent) {
+    basePrompt += `\n\n## 用户信息\n\n${userMdContent}`;
   }
   
   // 构建包含长期记忆的系统提示词
@@ -654,28 +731,49 @@ async function runAgentOnce(
   // 构建消息历史
   const messages: ChatMessage[] = [...context, userMessage];
 
-  // 获取系统提示词
-  const systemPrompt = getGroupSystemPrompt(
-    group,
-    input.userId || input.chatJid,
-    input.isMain,
-    input.isScheduledTask
-  );
-
   // 获取工具定义（插件工具 + 内置后备工具）
-  const allTools = getAllTools();
+  let allTools = getAllTools();
+
+  // ==================== Agent 路由 + 工具白名单（可选，由 agent-manager 插件提供） ====================
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const agentRegistry = (globalThis as any).__flashclaw_agent_registry as {
+    resolveAgent: (ctx: { channel?: string; group?: string; peer?: string }) => MultiAgentConfig;
+    filterToolsByAgent: <T extends { name: string }>(config: MultiAgentConfig, tools: T[]) => T[];
+  } | undefined;
+
+  let resolvedAgentName: string | undefined;
+  let resolvedAgentSoul: string | undefined;
+
+  if (agentRegistry) {
+    const agentConfig = agentRegistry.resolveAgent({
+      channel: input.platform,
+      group: group.folder,
+      peer: input.userId,
+    });
+    logger.debug({
+      agentId: agentConfig.id,
+      agentName: agentConfig.name,
+      agentSoul: agentConfig.soul,
+    }, '🎯 Agent 路由结果');
+    resolvedAgentName = agentConfig.name;
+    resolvedAgentSoul = agentConfig.soul;
+    allTools = agentRegistry.filterToolsByAgent(agentConfig, allTools);
+  }
   
   // ==================== 意图路由 + 工具过滤 ====================
   // 根据用户消息关键词预筛选工具，减少小模型的选择负担
   // 只在高置信度时过滤，无匹配时传全部工具（零误判回退）
+  // 意图检测必须在系统提示词构建之前，以便按意图裁剪提示词
   let tools: ToolSchema[];
   let systemPromptExtra = '';
+  let detectedIntent: string | null = null;
 
   if (process.env.TOOL_ROUTING === 'off') {
     tools = allTools;
   } else {
     const routeResult = filterToolsByIntent(input.prompt, allTools);
     tools = routeResult.tools;
+    detectedIntent = routeResult.intent;
 
     // 对于 recall 类意图，代码层面直接调用 memory_search，注入结果到提示词
     // 不依赖小模型主动调用工具
@@ -716,6 +814,17 @@ async function runAgentOnce(
     filtered: tools.length,
     toolNames: tools.map(t => t.name)
   }, '⚡ 工具列表');
+
+  // 获取系统提示词（在意图检测之后，以便按意图裁剪提示词内容）
+  const systemPrompt = getGroupSystemPrompt(
+    group,
+    input.userId || input.chatJid,
+    input.isMain,
+    input.isScheduledTask,
+    detectedIntent,
+    resolvedAgentName,
+    resolvedAgentSoul
+  ) + systemPromptExtra;
 
   // ==================== 上下文窗口保护 ====================
   const modelContextWindow = getModelContextWindow(currentModel);

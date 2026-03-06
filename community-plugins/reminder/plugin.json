@@ -1,0 +1,7 @@
+{
+  "name": "reminder",
+  "version": "1.0.0",
+  "type": "tool",
+  "description": "设置简单提醒（简化版定时任务）",
+  "main": "index.ts"
+}

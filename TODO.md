@@ -1,7 +1,7 @@
 # FlashClaw 开发路线图
 
-> 当前版本: v1.7.1
-> 更新时间: 2026-03-04
+> 当前版本: v1.8.0
+> 更新时间: 2026-03-06
 
 ---
 
@@ -65,47 +65,43 @@
 - [ ] 区域地图 — 5 个功能区域（休息/思考/工作/Bug/会议）有明确视觉边界
 
 **5.2 实时状态系统（纯代码）**
-- [ ] SSE 实时推送 — 新增 `/sse/agent-state` 端点，替换轮询，状态变化即时推送
-- [ ] 状态机扩展 — 精确追踪 agent 生命周期: idle→thinking→tool_use→responding→error
-- [ ] 气泡实时更新 — 显示当前正在处理的消息内容/使用的工具名称
+- [x] SSE 实时推送 — 新增 `/sse/agent-state` 端点，替换轮询，状态变化即时推送
+- [x] 状态机扩展 — 精确追踪 agent 生命周期: idle→thinking→tool_use→responding→error
+- [x] 气泡实时更新 — 显示当前正在处理的消息内容/使用的工具名称
 - [ ] 位置平滑移动 — CSS transition + 缓动函数，龙虾在区域间移动
 
 **5.3 每日小记 & 记忆（纯代码）**
-- [ ] 今日/昨日小记 — 从 memory 插件 `data/memory/daily/` 读取展示
+- [x] 今日/昨日小记 — 从 memory 插件 `data/memory/daily/` 读取展示（`/api/daily-note` API + DailyNote 组件）
 - [ ] 记忆时间线 — 展示最近保存的长期记忆条目
-- [ ] 对话统计 — 今日对话数、token 消耗、工具调用次数
+- [x] 对话统计 — 今日消息数、今日会话数（`/api/stats/today` API）
 
 **5.4 渠道状态可视化（纯代码）**
+- [x] 渠道状态卡（第一版）— Web UI 可访问 + 渠道插件启用态展示（避免误报在线状态）
 - [ ] 渠道连接状态 — 飞书 ✅ / Telegram ❌ / Web UI ✅
 - [ ] 渠道图标/角色 — 每个渠道一个小角色在办公室场景中（可选素材或 emoji）
 - [ ] 最近消息来源 — 显示最后一条消息来自哪个渠道
 
-**5.5 多 Agent 协作（参考 OpenClaw 架构）**
+**5.5 多 Agent 协作可视化**
 
-> OpenClaw 模式：Coordinator（任务分解） → 专业 Agent（执行） → 消息总线通信
+> 后端多 Agent 基础设施详见 P1 第 4 节（人格系统 & 多 Agent）。
+> 本节仅涉及 Web UI 前端可视化部分。
 
-- [ ] **Agent 注册表** — `agents/` 目录管理，每个 Agent 有独立配置（id/name/role/model/tools/systemPrompt）
-- [ ] **Coordinator Agent** — 主 Agent 负责理解用户需求、分解任务、分发到专业 Agent
-- [ ] **消息总线** — Agent 之间通过 `agent_send` 工具通信（publish/subscribe + 超时等待）
-- [ ] **Agent 生命周期** — 启动/停止/状态查询，每个 Agent 独立的上下文和记忆
-- [ ] **工具白名单** — 每个 Agent 只能使用指定的工具子集，减少 token 消耗
+- [x] 办公室状态看板原型 — 场景分区、角色状态推导、点击角色聚焦详情
 - [ ] **可视化看板** — 办公室场景中每个 Agent 是一个独立角色，实时显示状态/任务/气泡
 - [ ] **任务看板** — Trello 风格的任务卡片流转（待办→进行中→完成）
 - [ ] **协作动画** — Agent 之间传递任务的视觉效果（连线/箭头/消息飞行）
 
 **5.6 活动时间线（纯代码）**
-- [ ] 实时活动流 — 消息收发、工具调用、任务执行、Agent 通信的时间线
-- [ ] 活动图标 — 不同类型活动用不同图标/颜色
-- [ ] 可点击详情 — 点击活动条目展开详细信息
+- [x] 实时活动流（第一版）— 解析 `/api/activity` HTML，失败时回退到 status 推导事件
+- [x] 活动图标 — 不同类型活动用不同图标/颜色
+- [x] 可点击详情 — 点击活动条目展开详细信息（发送者、完整内容）
 
-**5.7 Agent 进阶（参考 Claw-Empire / AgentOffice）**
-- [ ] **Agent 性格系统** — 每个 Agent 有独立 SOUL.md 人格文件，影响气泡对话和行为风格
-- [ ] **动态招聘** — Coordinator Agent 根据任务需要自动创建新的专业 Agent（`hire_agent` 工具）
-- [ ] **经验值 & 等级** — Agent 完成任务获得经验，升级后解锁更多工具/能力（持久化到 DB）
+**5.7 Agent 可视化进阶（纯前端，后端见 P1 第 4 节）**
+- [x] Agent 详情卡（第一版）— 点击角色查看状态、区域与全局服务统计
 - [ ] **Agent 聚焦模式** — 点击角色后镜头跟随，显示详细信息面板（工具调用历史、记忆、统计）
 - [ ] **Agent 之间对话气泡** — Agent 通信时在场景中实时显示消息气泡动画
-- [ ] **会议系统** — Agent 之间开会讨论任务分配，生成会议纪要保存到记忆
-- [ ] **技能库** — 可浏览和分配 Agent 技能（对应 FlashClaw 的工具插件白名单）
+- [ ] **经验值 & 等级 UI** — Agent 等级/经验条可视化（数据来源待后端支持）
+- [ ] **技能库面板** — 可浏览和分配 Agent 技能的 UI（对应工具白名单配置）
 
 **5.8 场景 & 主题（需要素材 + 部分代码）**
 - [ ] **Office Pack 模板** — 不同工作模式（开发/研究/写作）自动切换场景布局和 Agent 配置
@@ -155,15 +151,15 @@
 **目标**：4B 小模型也能正确使用所有功能，代码层面保证行为正确。
 
 - [x] **意图路由 + 工具过滤** — 根据用户消息关键词预筛选工具列表（7 类意图），recall 意图自动调用 memory_search 注入结果
-- [ ] **按需注入提示词** — 系统提示词按意图动态裁剪，不把所有工具说明都塞进去
-- [ ] **工具参数后处理** — 工具执行前自动修正常见格式错误（如时间格式 `2024-12-31 9:00` → ISO 8601）
-- [ ] **基于规则的摘要** — `/compact` 支持不调用 AI 的规则摘要模式（提取最近 N 轮 key messages）
+- [x] **按需注入提示词** — 系统提示词按意图动态裁剪（schedule/web/memory 等意图只注入对应段落），减少小模型上下文占用
+- [x] **工具参数后处理** — 工具执行前自动修正常见格式错误（时间格式→ISO、中文间隔→ms、字段名 snake_case→camelCase、scope/action 别名）
+- [x] **基于规则的摘要** — `/compact fast` 支持不调用 AI 的规则摘要模式（提取最近 3 条用户消息 + 2 条 AI 回复要点）
 
 ### 3. 轻量 ReAct 自主循环
-- [ ] 核心增加 ReAct 循环逻辑（maxReactRounds: 3）
-- [ ] web_search 工具（简单搜索）
-- [ ] local_file_read 工具（本地文件读取）
-- [ ] reminder 工具（简单提醒）
+- [x] 核心增加 ReAct 循环配置（`REACT_MAX_ROUNDS` 环境变量，默认 10）
+- [x] web_search 工具（DuckDuckGo 搜索，自动代理支持）
+- [x] local_file_read 工具（本地文件读取 + 目录列表，安全白名单）
+- [x] reminder 工具（简化版定时提醒，只需 message + time 两个参数，小模型友好）
 
 ---
 
@@ -174,10 +170,242 @@
 - [ ] 长对话自动摘要写入 long_term_memory
 - [ ] 记忆卡片组件
 
-### 4. 人格快照 & 实时切换
-- [ ] souls/ 目录管理
-- [ ] soul-manager.ts 管理器
-- [ ] flashclaw soul CLI 命令
+### 4. 人格系统 & 多 Agent（参考 OpenClaw）
+
+> **调研来源**（2026-03-06 深度调研）：
+> - OpenClaw SOUL.md 四段式结构（Core Truths / Boundaries / Vibe / Continuity）
+> - OpenClaw 多 Agent 路由（8 级匹配：peer → parentPeer → guildId+roles → ... → default）
+> - OpenClaw Session Tools（sessions_list / sessions_history / sessions_send / sessions_spawn）
+> - OpenClaw Workspace Bootstrap（AGENTS.md / SOUL.md / USER.md / TOOLS.md / IDENTITY.md / MEMORY.md）
+> - OpenClaw Prompt Modes（full / minimal / none）— 子 Agent 用精简提示词
+> - soul.md 开源标准（composable, forkable, evolvable — 跨平台人格定义）
+> - AgentOffice（Phaser + React 像素办公室、Agent 自动招聘、sessions_send 通信）
+
+**当前 FlashClaw 现状：**
+- ✅ 全局 SOUL.md（`~/.flashclaw/SOUL.md`）+ 会话级 SOUL.md（`data/groups/{folder}/SOUL.md`）
+- ✅ init 向导支持自由文本人格输入
+- ✅ 会话级优先于全局（`agent-runner.ts:390-403`）
+- ❌ SOUL.md 无结构化模板，用户不知道该写什么
+- ❌ 无人格切换命令（`/soul`）、无预置人格库
+- ❌ 单 Agent 架构：所有渠道/群组共用同一个 Agent 人格和工具集
+- ❌ 无 Agent 间通信、无工具白名单、无子 Agent 派生
+
+---
+
+**Phase 1：SOUL.md 增强（短期，不改架构）**
+
+1.1 ✅ **结构化 SOUL.md 模板**
+- 提供默认四段式模板文件 `souls/default.md`
+- 格式参考 OpenClaw，适配 FlashClaw 场景：
+  ```markdown
+  # FlashClaw SOUL
+
+  ## 核心身份
+  你是 FlashClaw ⚡🦞，一只闪电龙虾。
+  你快如闪电，说话简洁有力。
+
+  ## 边界
+  - 不编造事实，不确定时说"我不确定"
+  - 尊重用户隐私，不主动询问私人信息
+  - 群聊中保持克制，不要喧宾夺主
+  - 有外部操作（发消息、操作浏览器）时先确认
+
+  ## 风格
+  - 简洁直接，不说废话（不要"好的！""当然可以！"）
+  - 适度幽默，偶尔用海洋/闪电比喻
+  - 有自己的观点，不做应声虫
+  - 用 emoji 但不过度
+
+  ## 记忆与成长
+  - 记住用户的名字和偏好
+  - 跨会话保持一致的性格
+  - 每天做简短日志，记录有趣的对话
+  ```
+
+1.2 ✅ **预置人格库 `souls/` 目录**
+- `souls/default.md` — 默认闪电龙虾人格
+- `souls/serious.md` — 严肃专业助手（适合工作场景）
+- `souls/casual.md` — 轻松幽默伙伴（适合日常聊天）
+- `souls/minimal.md` — 极简助手（最少 token 占用，适合小模型）
+- 目录位置：`~/.flashclaw/souls/` 或项目内 `data/souls/`
+
+1.3 ✅ **`/soul` 聊天命令**
+- `/soul` 或 `/soul show` — 显示当前人格名称和内容摘要
+- `/soul list` — 列出所有可用人格（`souls/` 目录下的 `.md` 文件）
+- `/soul use <name>` — 切换到指定人格（复制到当前会话的 SOUL.md）
+- `/soul reset` — 恢复为默认人格
+- 实现位置：`src/commands.ts` 新增 case，读写 SOUL.md 文件
+
+1.4 ✅ **USER.md 支持（参考 OpenClaw）**
+- 新增 `~/.flashclaw/USER.md` 文件，存放用户自我介绍
+- 格式：
+  ```markdown
+  # 关于我
+  - 名字：张三
+  - 语言偏好：中文
+  - 常用场景：工作沟通、技术问答
+  - 备注：喜欢简洁回复，不喜欢废话
+  ```
+- 在 `agent-runner.ts` 的 `getGroupSystemPrompt` 中注入（在 SOUL.md 之后、工具说明之前）
+- 与长期记忆互补：USER.md 是用户主动编辑的静态信息，长期记忆是 AI 观察到的动态信息
+
+1.5 **init 向导增强**
+- 人格配置改为模板选择（而不是自由输入）：
+  ```
+  ? 选择 AI 人格
+  ○ 默认闪电龙虾 — 简洁有力，偶尔幽默
+  ○ 严肃助手 — 专业正式，适合工作
+  ○ 轻松伙伴 — 活泼有趣，适合日常
+  ○ 极简模式 — 最少 token，适合小模型
+  ○ 自定义 — 手动输入人格描述
+  ```
+
+---
+
+**Phase 2：多 Agent 基础设施（中期，架构级变更）**
+
+> 核心思路：参考 OpenClaw 的 "Agent = 独立人格 + 独立工具集 + 独立会话" 模型，
+> 但简化路由规则（OpenClaw 8 级太复杂），FlashClaw 只做 "按渠道/群组绑定"。
+
+2.1 ✅ **Agent 注册表**
+- 配置文件：`~/.flashclaw/agents.json`（或 `config.json` 的 `agents` 字段）
+- 格式：
+  ```json
+  {
+    "agents": [
+      {
+        "id": "main",
+        "name": "FlashClaw",
+        "soul": "souls/default.md",
+        "model": null,
+        "tools": ["*"],
+        "default": true
+      },
+      {
+        "id": "work",
+        "name": "工作助手",
+        "soul": "souls/serious.md",
+        "model": "openai-provider",
+        "tools": ["schedule_task", "list_tasks", "memory", "web_fetch", "send_message"],
+        "bindings": [
+          { "channel": "feishu", "group": "work-*" }
+        ]
+      },
+      {
+        "id": "life",
+        "name": "生活伙伴",
+        "soul": "souls/casual.md",
+        "model": null,
+        "tools": ["memory", "send_message", "schedule_task"],
+        "bindings": [
+          { "channel": "telegram" }
+        ]
+      }
+    ]
+  }
+  ```
+- 核心类型：
+  ```typescript
+  interface AgentConfig {
+    id: string;              // 唯一标识
+    name: string;            // 显示名称
+    soul: string;            // SOUL.md 文件路径（相对于 ~/.flashclaw/）
+    model?: string | null;   // AI Provider 名称（null = 使用默认）
+    tools: string[];         // 工具白名单（["*"] = 全部）
+    default?: boolean;       // 是否为默认 Agent
+    bindings?: AgentBinding[];
+  }
+  interface AgentBinding {
+    channel?: string;        // 渠道名（feishu / telegram / web-ui / *）
+    group?: string;          // 群组名/ID（支持通配符 work-*）
+    peer?: string;           // 私聊对象 ID
+  }
+  ```
+
+2.2 ✅ **消息路由改造**
+- 当前：消息 → `handleIncomingMessage` → 注册群组 → 触发 Agent（同一个）
+- 改造后：消息 → `handleIncomingMessage` → **resolveAgent(msg)** → 注册群组 → 触发 **指定** Agent
+- 路由匹配规则（3 级，比 OpenClaw 简化）：
+  1. `peer` 精确匹配（特定私聊用户绑定到特定 Agent）
+  2. `channel + group` 匹配（特定渠道的特定群组）
+  3. `channel` 匹配（整个渠道）
+  4. 回退到 `default: true` 的 Agent
+- 路由结果影响：
+  - 使用该 Agent 的 SOUL.md（人格）
+  - 使用该 Agent 的 model（AI Provider）
+  - 使用该 Agent 的 tools 白名单过滤工具列表
+  - 会话仍按 chatId 隔离（不变）
+
+2.3 ✅ **Agent 间通信（`agent_send` 工具）**
+- 参考 OpenClaw 的 `sessions_send`，但简化：
+  ```json
+  {
+    "name": "agent_send",
+    "description": "向另一个 Agent 发送消息并等待回复",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "agentId": { "type": "string", "description": "目标 Agent ID" },
+        "message": { "type": "string", "description": "要发送的消息" },
+        "timeoutSeconds": { "type": "number", "description": "等待超时（秒），0=不等待" }
+      },
+      "required": ["agentId", "message"]
+    }
+  }
+  ```
+- 执行流程：
+  1. 创建临时会话 → 调用目标 Agent 的 `runAgent`
+  2. 如果 `timeoutSeconds > 0`：等待结果返回
+  3. 如果 `timeoutSeconds = 0`：异步执行，返回 `{ status: "accepted", runId }`
+- 安全：只能调用已注册的 Agent，不能自己调用自己
+
+2.4 ✅ **工具白名单**
+- 已有基础：意图路由 `filterToolsByIntent` 可以过滤工具
+- 扩展：在意图过滤之前，先按 Agent 配置的 `tools` 字段过滤
+  ```typescript
+  // agent-runner.ts runAgentOnce 中
+  let allTools = getAllTools();
+  if (agentConfig.tools[0] !== '*') {
+    const allowed = new Set(agentConfig.tools);
+    allTools = allTools.filter(t => allowed.has(t.name));
+  }
+  // 然后再走意图路由 filterToolsByIntent
+  ```
+
+2.5 **Prompt Mode（提示词分级）**
+- 参考 OpenClaw 的 full / minimal / none：
+  - `full`（默认）：完整系统提示词 + SOUL + USER + 记忆 + 工具说明
+  - `minimal`（子 Agent / agent_send 调用）：只有身份声明 + 工具说明 + 当前时间
+  - `none`（极简）：只有一行身份声明
+- 在 `getGroupSystemPrompt` 中根据 `promptMode` 参数裁剪
+
+2.6 **子 Agent 派生（`agent_spawn`）**
+- 参考 OpenClaw 的 `sessions_spawn`，但简化：
+  - 主 Agent 可以派生临时子 Agent 执行特定任务
+  - 子 Agent 使用 `minimal` 提示词模式
+  - 子 Agent 不能再派生子 Agent（防止无限递归）
+  - 完成后自动归档
+
+---
+
+**Phase 3：StatusBoard 多 Agent 可视化（长期，依赖 Phase 2 + 前端 agent）**
+
+- 办公室场景中每个 Agent 是一个独立龙虾角色（不同颜色/装饰）
+- 实时显示每个 Agent 的状态（idle/thinking/tool_use/responding/error）
+- 点击角色查看该 Agent 的人格、工具列表、会话统计
+- Agent 间通信在场景中显示为气泡动画 / 连线
+- 任务看板（Trello 风格）显示各 Agent 的任务流转
+
+---
+
+**执行优先级建议：**
+- Phase 1.1 + 1.2（SOUL 模板 + 预置人格库）→ 最小改动，最大用户感知
+- Phase 1.3（/soul 命令）→ 用户体验闭环
+- Phase 1.4（USER.md）→ 进一步个性化
+- Phase 2.1 + 2.4（Agent 注册表 + 工具白名单）→ 架构核心
+- Phase 2.2（消息路由改造）→ 多 Agent 生效
+- Phase 2.3（Agent 间通信）→ 协作能力
+- Phase 3（可视化）→ 前端 agent 负责
 
 ---
 
@@ -341,30 +569,24 @@
 
 | 优先级 | 问题 | 位置 | 状态 |
 |--------|------|------|------|
-| P0 | 队列时间戳推进错误：批处理后仅推进到当前 `msg.timestamp`，可能重复处理同一批消息并重复回复 | `src/index.ts:324-328`, `src/index.ts:348-351`, `src/index.ts:411` | 待修复 |
-| P0 | `/new` 在未注册 group 场景可能“看起来成功但未真正清会话” | `src/core-api.ts:156-165`, `src/core-api.ts:289-298` | 待修复 |
-| P0 | `/compact` 在未注册 group 场景会“假成功”（`summary=null` 仍返回 success） | `src/core-api.ts:180-184` | 待修复 |
+| P0 | 队列时间戳推进错误：批处理后仅推进到当前 `msg.timestamp`，可能重复处理同一批消息并重复回复 | `src/index.ts:411` | ✅ 已修复 |
+| P0 | `/new` 在未注册 group 场景可能"看起来成功但未真正清会话" | `src/core-api.ts:156-177` | ✅ 已修复 |
+| P0 | `/compact` 在未注册 group 场景会"假成功"（`summary=null` 仍返回 success） | `src/core-api.ts:183-191` | ✅ 已修复 |
 
 ### 🟡 P1 — 稳定性 / 契约一致性
 
 | 优先级 | 问题 | 位置 | 状态 |
 |--------|------|------|------|
-| P1 | 任务超时后未取消原任务，可能出现“超时重试 + 原任务晚到副作用”双执行 | `src/task-scheduler.ts:245-247`, `src/task-scheduler.ts:319-362` | 待修复 |
-| P1 | Feishu `sendImage()` 失败路径未清理临时文件，可能累积到 `/tmp` | `community-plugins/feishu/index.ts:414-417`, `community-plugins/feishu/index.ts:426-428`, `community-plugins/feishu/index.ts:467-470` | 待修复 |
-| P1 | Web UI 聊天历史参数错位：`getChatHistory(50)` 把 `50` 当 group 使用 | `community-plugins/web-ui/server/routes/pages.ts:124`, `community-plugins/web-ui/server/services/chat.ts:75` | ✅ 已修复 |
-| P1 | Web UI 流式协议与渲染契约不一致：工具/指标事件与 assistant 文本混流 | `community-plugins/web-ui/server/routes/api.ts:223-232`, `community-plugins/web-ui/server/routes/pages.ts:275-314` | ✅ 已修复 |
-| P1 | 记忆插件默认 scope 仍偏向分组语义，不符合“跨渠道同一 FlashClaw”预期 | `plugins/memory/index.ts`, `src/core/memory.ts` | ✅ 已修复 |
+| P1 | 任务超时后未取消原任务，可能出现"超时重试 + 原任务晚到副作用"双执行 | `src/task-scheduler.ts:195-236` | ✅ 已修复 |
+| P1 | Feishu `sendImage()` 失败路径未清理临时文件，可能累积到 `/tmp` | `community-plugins/feishu/index.ts:396-470` | ✅ 已修复 |
+| P1 | Web UI SSR fallback 聊天历史参数错位：`getChatHistory(50)` 把 `50` 当 group 使用 | `community-plugins/web-ui/server/routes/pages.ts:124` | ✅ 已修复 |
+| P1 | Web UI SSR fallback 流式渲染仍会把 tool 事件混入 assistant 文本 | `community-plugins/web-ui/server/routes/pages.ts:302-308` | ✅ 已修复 |
+| P1 | Web UI React 日志页 SSE 清理失效：`useEffect` 未返回 `EventSource.close()` | `community-plugins/web-ui/frontend/src/pages/Logs.tsx:23-54` | ✅ 已修复 |
+| P1 | 记忆插件默认 scope 仍偏向分组语义，不符合"跨渠道同一 FlashClaw"预期 | `plugins/memory/index.ts`, `src/core/memory.ts` | ✅ 已修复 |
 | P1 | memory/memory-vector 插件通过类型断言访问私有配置（`mm as unknown as { config }`） | `plugins/memory/index.ts`, `community-plugins/memory-vector/index.ts` | ✅ 已修复 |
 | P2 | 记忆文件写入缺少原子写，异常中断时可能导致文件不完整 | `src/core/memory.ts` | ✅ 已修复 |
 | P2 | 记忆解析会跳过以 `#`/`>` 开头的正文行，存在内容丢失风险 | `src/core/memory.ts` | ✅ 已修复 |
 | P2 | 每次构建系统提示都同步读取近期日志，存在可避免的 IO 开销 | `src/core/memory.ts` | ✅ 已修复 |
-
-### 🟢 P2 — 建议改进
-
-| 优先级 | 问题 | 位置 | 状态 |
-|--------|------|------|------|
-| P2 | Web UI 日志监听在异常路径可能泄漏文件描述符（`openSync/readSync` 非 finally 关闭） | `community-plugins/web-ui/server/services/logs.ts:177-180`, `community-plugins/web-ui/server/services/logs.ts:190-192` | 待修复 |
-| P2 | `session-tracker` 与 `model-capabilities` 的上下文窗口映射不一致，导致 `/status` 与压缩提示可能失真 | `src/session-tracker.ts:173-196`, `src/core/model-capabilities.ts:28-58`, `src/core/model-capabilities.ts:105-123` | 待修复 |
 
 ### ✅ 亮点
 
@@ -376,13 +598,50 @@
 - 工具结果截断 + 历史压缩有效控制 token 用量
 - 消息队列（去重、并发控制、超时、重试）
 
+## 代码审查摘要 (2026-03-06)
+
+> 审查范围：commit `47681f3` — 移除 CLI 渠道、anthropic-provider mock 模式、web-ui core-api 迁移
+
+### 🔴 P0 — 运行时 Bug
+
+| 优先级 | 问题 | 位置 | 状态 |
+|--------|------|------|------|
+| P0 | Logs.tsx SSE 永不清理 — `fetchLogs` 是 async 函数，`return () => evtSource.close()` 在 Promise 内部，useEffect 无法拿到 cleanup；页面切换后 EventSource 连接泄漏 | `community-plugins/web-ui/frontend/src/pages/Logs.tsx:23-54` | ✅ 已修复 |
+| P0 | SSR fallback 聊天历史参数类型错误 — `getChatHistory(50)` 把数字 50 传给 `group: string`，实际查询 `50-chat`，永远返回空 | `community-plugins/web-ui/server/routes/pages.ts:124` | ✅ 已修复 |
+
+### 🟡 P1 — 稳定性 / 安全
+
+| 优先级 | 问题 | 位置 | 状态 |
+|--------|------|------|------|
+| P1 | Cookie `Secure` flag 在 HTTP 下失效 — 本地 HTTP 访问时带 `Secure` 的 cookie 不被浏览器接受，登录后 cookie 丢失。建议按协议动态设置 | `community-plugins/web-ui/server/app.ts:88` | ✅ 已修复 |
+| P1 | chat.ts DB 写入失败完全静默 — `saveMessageToDb` 的 catch 块为空，数据丢失时无任何日志 | `community-plugins/web-ui/server/services/chat.ts:65-67` | ✅ 已修复 |
+| P1 | Banner 硬编码 Web UI URL — 即使 web-ui 插件未加载，也显示 `http://127.0.0.1:3000 ← Web UI`，误导用户 | `src/index.ts:1146` | ✅ 已修复 |
+| P1 | Chat.tsx 死代码 — `assistantIdx` 变量声明后从未使用，引用闭包中可能过期的 `messages.length` | `community-plugins/web-ui/frontend/src/pages/Chat.tsx:54` | 建议 |
+| P1 | status.ts 活动数据源硬编码 — `getRecentActivity` 只查 `main-chat`，其他渠道/群组活动不可见 | `community-plugins/web-ui/server/services/status.ts:75-103` | ✅ 已修复 |
+
+### ✅ 亮点
+
+- CLI 渠道清理彻底 — `cli-channel/`、`cli-ink.tsx`、package.json 依赖全部移除，无残留引用
+- anthropic-provider Mock 模式完整 — `chat`/`chatStream`/`handleToolUse` 三条路径均覆盖
+- web-ui services 完成 core-api 迁移 — `chat.ts`/`status.ts` 统一走 `core-api`
+- NDJSON 流式协议 — 用 `\n` 分隔完整 JSON，避免 SSE/chunk 边界截断问题
+
 ---
 
 ## 待优化项
 
 ### 🔴 高优先级
 
-**架构问题：**
+**架构解耦（核心极简化）：**
+- [ ] `index.ts` IPC 任务处理外移 — `processTaskIpc` 内嵌了 `schedule_task`/`pause_task`/`resume_task`/`cancel_task`/`register_group` 五种处理逻辑（含 Zod schema、cron 解析、DB 操作），应改为插件可注册的 IPC handler 机制
+- [ ] `task-scheduler.ts` 插件化 — 整个文件 430+ 行是定时任务调度逻辑，`index.ts` 直接 import `startSchedulerLoop`/`wake`，应改为由 schedule-task 插件自行管理生命周期
+- [ ] `tool-params.ts` 硬编码工具名 — `NORMALIZERS` 映射表直接引用 `schedule_task`（已不是核心插件），应改为插件可注册参数修正器
+- [ ] `agent-runner.ts` 意图路由硬编码 — `INTENT_ROUTES` 数组硬编码了 `schedule_task`/`list_tasks`/`register_group` 等工具名，应改为插件可注册意图规则
+- [ ] `agent-runner.ts` 系统提示词耦合 — `getGroupSystemPrompt` 中硬编码了 `## schedule_task 时间计算` 使用说明，应改为插件可注入提示词片段
+- [ ] `db.ts` 任务 schema 解耦 — `createTask`/`getAllTasks` 等 ScheduledTask 专用函数让核心 DB 层与定时任务强耦合，考虑改为通用 KV 存储 + 插件自建表
+- [ ] `core-api.ts` 任务接口解耦 — `getTasks()` 函数直接暴露任务查询，应通过插件注册 API 扩展点
+
+**已完成：**
 - [x] 配置路径不一致 - `config.ts` 已统一使用 `paths.ts` 管理
 - [x] 路径定义重复 - `config.ts` 中的变量已标记 `@deprecated`，统一使用 `paths.ts`
 - [x] IPC 输入验证不足 - `processTaskIpc` 已添加完整的 Zod schema 验证

@@ -1,0 +1,7 @@
+{
+  "name": "local-file-read",
+  "version": "1.0.0",
+  "type": "tool",
+  "description": "读取本地文件内容",
+  "main": "index.ts"
+}

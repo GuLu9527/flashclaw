@@ -93,3 +93,69 @@ sseRoutes.get('/status', async (c) => {
     }
   });
 });
+
+// Agent 状态实时推送（含工具名、消息内容等详细信息）
+sseRoutes.get('/agent-state', async (c) => {
+  return streamSSE(c, async (stream) => {
+    let lastState = '';
+    try {
+      while (true) {
+        const { getServiceStatus, getRecentActivity } = await import('../services/status.js');
+        const status = getServiceStatus();
+        const recentActivity = getRecentActivity(1);
+
+        // 推导 agent 状态
+        let agentState = 'idle';
+        let detail = '';
+
+        if (!status.running) {
+          agentState = 'error';
+          detail = '服务未运行';
+        } else if (status.activeSessions > 0) {
+          agentState = 'responding';
+          detail = `${status.activeSessions} 个活跃会话`;
+        } else if (status.activeTaskCount > 0) {
+          agentState = 'tool_use';
+          detail = `${status.activeTaskCount} 个活跃任务`;
+        }
+
+        // 最近活动信息（用于气泡显示）
+        const lastActivity = recentActivity.length > 0 ? recentActivity[0] : null;
+
+        const statePayload = JSON.stringify({
+          state: agentState,
+          detail,
+          status,
+          lastActivity: lastActivity ? {
+            sender: lastActivity.sender,
+            content: lastActivity.content,
+            time: lastActivity.time,
+          } : null,
+        });
+
+        // 只在状态变化或每 3 秒推送一次
+        if (statePayload !== lastState) {
+          await stream.writeSSE({
+            data: statePayload,
+            event: 'agent-state',
+          }).catch(() => {
+            throw new Error('Connection closed');
+          });
+          lastState = statePayload;
+        } else {
+          // 心跳
+          await stream.writeSSE({
+            data: '',
+            event: 'heartbeat',
+          }).catch(() => {
+            throw new Error('Connection closed');
+          });
+        }
+
+        await stream.sleep(2000);
+      }
+    } catch {
+      // 连接关闭
+    }
+  });
+});

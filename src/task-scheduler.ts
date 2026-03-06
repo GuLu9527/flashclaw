@@ -89,6 +89,9 @@ function getState(): SchedulerState {
 // 并发限制器
 const taskLimit = pLimit(MAX_CONCURRENT_TASKS);
 
+// 正在执行中的任务 ID 集合（防止超时重试与原任务双执行）
+const runningTaskIds = new Set<string>();
+
 // ==================== 精确定时器 ====================
 
 /**
@@ -190,35 +193,46 @@ async function runDueTasks(): Promise<void> {
  * 执行单个任务（带超时和重试）
  */
 async function executeTask(task: ScheduledTask): Promise<void> {
+  // 防止同一任务并发执行（超时后重试时，原任务可能仍在后台运行）
+  if (runningTaskIds.has(task.id)) {
+    logger.warn({ taskId: task.id }, '任务仍在执行中，跳过本次调度');
+    return;
+  }
+  runningTaskIds.add(task.id);
+
   const startTime = Date.now();
   const deps = getState().deps!;
 
   logger.info({ taskId: task.id, group: task.group_folder }, '⚡ 开始执行任务');
 
-  // 执行任务
-  const result = await runTaskWithTimeout(task, deps);
+  try {
+    // 执行任务
+    const result = await runTaskWithTimeout(task, deps);
 
-  // 记录运行日志
-  logTaskRun({
-    task_id: task.id,
-    run_at: new Date().toISOString(),
-    duration_ms: result.durationMs,
-    status: result.success ? 'success' : 'error',
-    result: result.result,
-    error: result.error
-  });
+    // 记录运行日志
+    logTaskRun({
+      task_id: task.id,
+      run_at: new Date().toISOString(),
+      duration_ms: result.durationMs,
+      status: result.success ? 'success' : 'error',
+      result: result.result,
+      error: result.error
+    });
 
-  if (result.success) {
-    // 成功：重置重试计数，计算下次运行时间
-    resetTaskRetry(task.id);
-    const nextRun = calculateNextRun(task);
-    const resultSummary = result.result ? result.result.slice(0, 200) : 'Completed';
-    updateTaskAfterRun(task.id, nextRun, resultSummary);
+    if (result.success) {
+      // 成功：重置重试计数，计算下次运行时间
+      resetTaskRetry(task.id);
+      const nextRun = calculateNextRun(task);
+      const resultSummary = result.result ? result.result.slice(0, 200) : 'Completed';
+      updateTaskAfterRun(task.id, nextRun, resultSummary);
 
-    logger.info({ taskId: task.id, durationMs: result.durationMs }, '⚡ 任务执行成功');
-  } else {
-    // 失败：处理重试逻辑
-    await handleTaskFailure(task, result.error || 'Unknown error');
+      logger.info({ taskId: task.id, durationMs: result.durationMs }, '⚡ 任务执行成功');
+    } else {
+      // 失败：处理重试逻辑
+      await handleTaskFailure(task, result.error || 'Unknown error');
+    }
+  } finally {
+    runningTaskIds.delete(task.id);
   }
 }
 

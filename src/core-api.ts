@@ -126,7 +126,7 @@ export function getStatus(): ServiceStatus {
     activeTaskCount: activeTasks.length,
     totalTaskCount: tasks.length,
     provider: provider?.name || null,
-    model: provider ? getCurrentModelId() : null,
+    model: provider?.getModel?.() || getCurrentModelId() || null,
   };
 }
 
@@ -153,22 +153,28 @@ export function getHistory(chatId: string, limit = 50): Array<{ role: string; co
 /**
  * 清除会话（/new 命令）
  */
-export function clearSession(groupName: string): void {
+export function clearSession(groupName: string): boolean {
   const d = getDeps();
   const groups = d.getRegisteredGroups();
   
-  // 找到群组对应的 folder
-  const entry = Object.entries(groups).find(([, g]) => g.folder === groupName || g.name === groupName);
-  if (entry) {
-    d.resetSession(entry[1].folder);
-    resetTrackerSession(entry[0]);
+  // 找到群组对应的 folder（支持 folder、name、chatId 格式查找）
+  const entry = Object.entries(groups).find(([chatId, g]) => 
+    g.folder === groupName || g.name === groupName || chatId === groupName || chatId === `${groupName}-chat`
+  );
+  if (!entry) {
+    logger.warn({ group: groupName }, '清除会话失败：群组未注册');
+    return false;
   }
+
+  d.resetSession(entry[1].folder);
+  resetTrackerSession(entry[0]);
   
   // 清除记忆上下文
   const mm = getMemoryManager();
-  mm.clearContext(groupName);
+  mm.clearContext(entry[1].folder);
   
-  logger.info({ group: groupName }, '⚡ 会话已清除');
+  logger.info({ group: groupName, folder: entry[1].folder }, '⚡ 会话已清除');
+  return true;
 }
 
 /**
@@ -180,6 +186,7 @@ export async function compactSession(chatId: string, groupName: string, userId?:
   const group = groups[chatId] || Object.values(groups).find(g => g.folder === groupName);
   
   if (!group) {
+    logger.warn({ chatId, groupName }, '会话压缩失败：群组未注册');
     return null;
   }
 

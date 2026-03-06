@@ -7,7 +7,7 @@ import { html } from 'hono/html';
 import { getServiceStatus, getRecentActivity } from '../services/status.js';
 import { getTasks, pauseTask, resumeTask, deleteTask } from '../services/tasks.js';
 import { getPlugins, togglePlugin } from '../services/plugins.js';
-import { sendMessage, sendMessageStream, clearChatHistory, getChatHistory } from '../services/chat.js';
+import { sendMessage, sendMessageStream, clearChatHistory, getChatHistory, getSessions, createSession, cancelRequest, getActiveRequestId } from '../services/chat.js';
 import { statusBadge } from '../../views/layout.js';
 
 export const apiRoutes = new Hono();
@@ -267,4 +267,200 @@ apiRoutes.post('/chat/clear', async (c) => {
     return c.json({ success: true, message: '聊天记录已清空' });
   }
   return c.json({ success: false, error: '清空失败' }, 500);
+});
+
+// 获取当前会话的上下文和模型信息
+apiRoutes.get('/chat/context', async (c) => {
+  try {
+    const group = c.req.query('group') || 'main';
+    const api = (global as Record<string, unknown>).__flashclaw_core_api as {
+      getSessionInfo?: (chatId: string) => { messageCount: number; tokenCount: number; maxTokens: number; model: string; usagePercent: number } | null;
+      getStatus?: () => { model: string | null; provider: string | null };
+    } | undefined;
+
+    if (!api) {
+      return c.json({ success: false, error: '核心 API 未初始化' }, 500);
+    }
+
+    const chatId = `${group}-chat`;
+    const sessionInfo = api.getSessionInfo?.(chatId);
+    const status = api.getStatus?.();
+
+    return c.json({
+      success: true,
+      model: status?.model || null,
+      provider: status?.provider || null,
+      tokenCount: sessionInfo?.tokenCount ?? 0,
+      maxTokens: sessionInfo?.maxTokens ?? 0,
+      usagePercent: sessionInfo?.usagePercent ?? 0,
+      messageCount: sessionInfo?.messageCount ?? 0,
+    });
+  } catch {
+    return c.json({ success: false, error: '获取上下文信息失败' }, 500);
+  }
+});
+
+// 取消正在进行的请求
+apiRoutes.post('/chat/cancel', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const group = body.group || 'main';
+  const requestId = getActiveRequestId(group);
+  if (requestId) {
+    cancelRequest(requestId);
+    return c.json({ success: true, message: '请求已取消' });
+  }
+  return c.json({ success: false, error: '没有正在进行的请求' });
+});
+
+// ==================== 每日小记 & 统计 API ====================
+
+// 获取今日/昨日小记
+apiRoutes.get('/daily-note', async (c) => {
+  try {
+    const fs = await import('fs');
+    const path = await import('path');
+
+    // 获取 memory daily 目录
+    const dataDir = process.env.FLASHCLAW_DATA_DIR || path.join(
+      process.env.HOME || process.env.USERPROFILE || '.',
+      '.flashclaw', 'data'
+    );
+    const dailyDir = path.join(dataDir, 'memory', 'daily');
+
+    if (!fs.existsSync(dailyDir)) {
+      return c.json({ success: true, today: null, yesterday: null });
+    }
+
+    const now = new Date();
+    const today = now.toISOString().split('T')[0];
+    const yesterday = new Date(now.getTime() - 86400000).toISOString().split('T')[0];
+
+    let todayContent: string | null = null;
+    let yesterdayContent: string | null = null;
+
+    const todayFile = path.join(dailyDir, `${today}.md`);
+    const yesterdayFile = path.join(dailyDir, `${yesterday}.md`);
+
+    if (fs.existsSync(todayFile)) {
+      todayContent = fs.readFileSync(todayFile, 'utf-8').trim();
+    }
+    if (fs.existsSync(yesterdayFile)) {
+      yesterdayContent = fs.readFileSync(yesterdayFile, 'utf-8').trim();
+    }
+
+    return c.json({
+      success: true,
+      today: todayContent,
+      yesterday: yesterdayContent,
+      todayDate: today,
+      yesterdayDate: yesterday,
+    });
+  } catch {
+    return c.json({ success: true, today: null, yesterday: null });
+  }
+});
+
+// 获取今日统计
+apiRoutes.get('/stats/today', async (c) => {
+  try {
+    const db = (globalThis as Record<string, unknown>).__flashclaw_db as
+      | { prepare: (sql: string) => { get: (...args: unknown[]) => Record<string, number> | undefined } }
+      | undefined;
+
+    if (!db) {
+      return c.json({ success: true, messages: 0, sessions: 0 });
+    }
+
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayISO = todayStart.toISOString();
+
+    // 今日消息数
+    const msgRow = db.prepare(
+      'SELECT COUNT(*) as count FROM messages WHERE timestamp >= ?'
+    ).get(todayISO);
+
+    // 今日活跃会话数（不同的 chat_jid）
+    const sessionRow = db.prepare(
+      'SELECT COUNT(DISTINCT chat_jid) as count FROM messages WHERE timestamp >= ?'
+    ).get(todayISO);
+
+    return c.json({
+      success: true,
+      messages: msgRow?.count ?? 0,
+      sessions: sessionRow?.count ?? 0,
+    });
+  } catch {
+    return c.json({ success: true, messages: 0, sessions: 0 });
+  }
+});
+
+// ==================== Agent API ====================
+
+// 获取已注册的 Agent 列表
+apiRoutes.get('/agents', async (c) => {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const registry = (globalThis as any).__flashclaw_agent_registry as {
+      getAllAgents?: () => Array<{ id: string; name: string; soul: string; tools: string[]; default?: boolean }>;
+    } | undefined;
+
+    if (registry?.getAllAgents) {
+      const agents = registry.getAllAgents().map(a => ({
+        id: a.id,
+        name: a.name,
+        soul: a.soul,
+        toolCount: a.tools[0] === '*' ? -1 : a.tools.length,
+        isDefault: a.default || false,
+      }));
+      return c.json({ success: true, agents });
+    }
+
+    // 无 agent-manager 插件时，返回默认单 Agent
+    const status = (global as Record<string, unknown>).__flashclaw_core_api as {
+      getStatus?: () => { model: string | null };
+    } | undefined;
+    return c.json({
+      success: true,
+      agents: [{
+        id: 'main',
+        name: 'FlashClaw',
+        soul: 'souls/default.md',
+        toolCount: -1,
+        isDefault: true,
+        model: status?.getStatus?.()?.model || null,
+      }],
+    });
+  } catch {
+    return c.json({ success: false, agents: [] });
+  }
+});
+
+// ==================== 会话 API ====================
+
+// 获取会话列表
+apiRoutes.get('/sessions', async (c) => {
+  const sessions = getSessions();
+  return c.json({ success: true, sessions });
+});
+
+// 创建新会话
+apiRoutes.post('/sessions', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const name = body.name;
+  if (!name || typeof name !== 'string') {
+    return c.json({ success: false, error: '会话名称不能为空' }, 400);
+  }
+  const id = createSession(name.trim());
+  return c.json({ success: true, id, name: name.trim() });
+});
+
+// 删除会话（清空消息 + 清除上下文）
+apiRoutes.delete('/sessions/:id', async (c) => {
+  const id = c.req.param('id');
+  if (id === 'main') {
+    return c.json({ success: false, error: '不能删除主会话' }, 400);
+  }
+  const success = clearChatHistory(id);
+  return c.json({ success });
 });

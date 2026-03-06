@@ -44,6 +44,8 @@ export const DATA_DIR = paths.data();
 export const AGENT_TIMEOUT = parseInt(process.env.AGENT_TIMEOUT || '300000', 10); // 5 minutes default
 /** AI 单次响应最大输出 token 数 */
 export const AI_MAX_OUTPUT_TOKENS = parseInt(process.env.AI_MAX_OUTPUT_TOKENS || '4096', 10);
+/** ReAct 自主循环最大轮数（工具调用链深度上限） */
+export const REACT_MAX_ROUNDS = parseInt(process.env.REACT_MAX_ROUNDS || '10', 10);
 
 // ==================== Scheduler Configuration ====================
 export const MAX_CONCURRENT_TASKS = parseInt(process.env.MAX_CONCURRENT_TASKS || '3', 10);

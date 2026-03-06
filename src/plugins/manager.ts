@@ -215,22 +215,44 @@ export class PluginManager {
    * 清空所有插件
    */
   async clear(): Promise<void> {
-    // 先停止所有渠道插件，清理所有工具插件，清理所有 provider 插件
+    const CLEANUP_TIMEOUT = 5000; // 每个插件最多等 5 秒
+
+    const withTimeout = <T>(promise: Promise<T>, name: string, action: string): Promise<T | void> => {
+      return Promise.race([
+        promise,
+        new Promise<void>((resolve) => {
+          setTimeout(() => {
+            logger.warn({ plugin: name }, `${action}超时（${CLEANUP_TIMEOUT}ms），跳过`);
+            resolve();
+          }, CLEANUP_TIMEOUT);
+        }),
+      ]);
+    };
+
     for (const entry of this.plugins.values()) {
       if (isChannelPlugin(entry.plugin)) {
-        await entry.plugin.stop().catch((err) => {
-          logger.warn({ plugin: entry.plugin.name, err }, '停止渠道插件失败（清空时）');
-        });
+        await withTimeout(
+          entry.plugin.stop().catch((err) => {
+            logger.warn({ plugin: entry.plugin.name, err }, '停止渠道插件失败（清空时）');
+          }),
+          entry.plugin.name, '停止渠道插件'
+        );
       }
       if (isToolPlugin(entry.plugin) && entry.plugin.cleanup) {
-        await entry.plugin.cleanup().catch((err) => {
-          logger.warn({ plugin: entry.plugin.name, err }, '清理工具插件失败（清空时）');
-        });
+        await withTimeout(
+          entry.plugin.cleanup().catch((err) => {
+            logger.warn({ plugin: entry.plugin.name, err }, '清理工具插件失败（清空时）');
+          }),
+          entry.plugin.name, '清理工具插件'
+        );
       }
       if (isAIProviderPlugin(entry.plugin) && entry.plugin.cleanup) {
-        await entry.plugin.cleanup().catch((err) => {
-          logger.warn({ plugin: entry.plugin.name, err }, '清理 Provider 插件失败（清空时）');
-        });
+        await withTimeout(
+          entry.plugin.cleanup().catch((err) => {
+            logger.warn({ plugin: entry.plugin.name, err }, '清理 Provider 插件失败（清空时）');
+          }),
+          entry.plugin.name, '清理 Provider 插件'
+        );
       }
     }
 

@@ -21,10 +21,42 @@ import type {
 
 let client: Anthropic | null = null;
 let model: string = 'claude-sonnet-4-20250514';
+let baseURL: string | undefined;
 
 // ==================== 内部常量和工具函数 ====================
 
 const MAX_TOOL_CALL_DEPTH = 20;
+
+/**
+ * 从错误对象中提取完整的错误信息链（包括 cause）
+ * Anthropic SDK 的 APIConnectionError 会将真正的网络错误藏在 cause 中
+ */
+function extractFullErrorMessage(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  
+  const parts: string[] = [err.message];
+  let current: unknown = (err as Error & { cause?: unknown }).cause;
+  let depth = 0;
+  
+  while (current && depth < 5) {
+    if (current instanceof Error) {
+      parts.push(current.message);
+      current = (current as Error & { cause?: unknown }).cause;
+    } else {
+      parts.push(String(current));
+      break;
+    }
+    depth++;
+  }
+  
+  // 附加 HTTP 状态码（如果是 API 错误）
+  const status = (err as Error & { status?: number }).status;
+  if (status) {
+    parts.unshift(`[HTTP ${status}]`);
+  }
+  
+  return parts.join(' → ');
+}
 const MAX_TOOL_RESULT_CHARS = 4000;
 const KEEP_RECENT_TOOL_ROUNDS = 2;
 const MOCK_RESPONSE_PREFIX = process.env.FLASHCLAW_MOCK_RESPONSE_PREFIX || 'MOCK';
@@ -211,7 +243,13 @@ async function streamFollowUp(
     params.tools = options.tools as unknown as Anthropic.Tool[];
   }
 
-  const stream = await client.messages.create(params);
+  let stream;
+  try {
+    stream = await client.messages.create(params);
+  } catch (err) {
+    const detail = extractFullErrorMessage(err);
+    throw new Error(`Anthropic API 后续请求失败 (${baseURL || 'default'}): ${detail}`);
+  }
 
   let finalMessage: Anthropic.Message | null = null;
   const contentBlocks: Array<Anthropic.TextBlock | Anthropic.ToolUseBlock> = [];
@@ -371,9 +409,11 @@ const anthropicProvider: AIProviderPlugin = {
       throw new Error('Missing API key: ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY');
     }
 
+    baseURL = config.baseURL as string || process.env.ANTHROPIC_BASE_URL || undefined;
+
     client = new Anthropic({
       apiKey,
-      baseURL: config.baseURL as string || process.env.ANTHROPIC_BASE_URL,
+      baseURL,
       maxRetries: 0,
       timeout: config.timeout ? Number(config.timeout) : 60000,
     });
@@ -416,7 +456,12 @@ const anthropicProvider: AIProviderPlugin = {
       params.stop_sequences = options.stopSequences;
     }
 
-    return await client.messages.create(params);
+    try {
+      return await client.messages.create(params);
+    } catch (err) {
+      const detail = extractFullErrorMessage(err);
+      throw new Error(`Anthropic API 请求失败 (${baseURL || 'default'}): ${detail}`);
+    }
   },
 
   async *chatStream(
@@ -467,7 +512,13 @@ const anthropicProvider: AIProviderPlugin = {
       params.temperature = options.temperature;
     }
 
-    const stream = await client.messages.create(params);
+    let stream;
+    try {
+      stream = await client.messages.create(params);
+    } catch (err) {
+      const detail = extractFullErrorMessage(err);
+      throw new Error(`Anthropic API 请求失败 (${baseURL || 'default'}): ${detail}`);
+    }
 
     let finalMessage: Anthropic.Message | null = null;
     const contentBlocks: Array<Anthropic.TextBlock | Anthropic.ToolUseBlock> = [];

@@ -42,6 +42,76 @@ interface StreamMetrics {
 const WEB_USER_ID = 'web-user';
 const WEB_PLATFORM = 'web-ui';
 
+// ==================== 活跃请求跟踪（用于取消） ====================
+
+const activeRequests = new Map<string, AbortController>();
+
+export function cancelRequest(requestId: string): boolean {
+  const controller = activeRequests.get(requestId);
+  if (controller) {
+    controller.abort();
+    activeRequests.delete(requestId);
+    return true;
+  }
+  return false;
+}
+
+export function getActiveRequestId(group: string): string | null {
+  for (const [id] of activeRequests) {
+    if (id.startsWith(`${group}:`)) return id;
+  }
+  return null;
+}
+
+// ==================== 会话列表 ====================
+
+export interface SessionInfo {
+  id: string;
+  name: string;
+  lastMessage?: string;
+  lastTime?: string;
+  messageCount: number;
+}
+
+/**
+ * 获取所有 web-ui 会话列表
+ */
+export function getSessions(): SessionInfo[] {
+  try {
+    const db = getDb();
+    const rows = db.prepare(`
+      SELECT c.jid, c.name, c.last_message_time,
+        (SELECT COUNT(*) FROM messages m WHERE m.chat_jid = c.jid) as msg_count,
+        (SELECT m.content FROM messages m WHERE m.chat_jid = c.jid ORDER BY m.timestamp DESC LIMIT 1) as last_msg
+      FROM chats c
+      WHERE c.jid LIKE '%-chat'
+      ORDER BY c.last_message_time DESC
+    `).all() as Array<{ jid: string; name: string; last_message_time: string; msg_count: number; last_msg: string | null }>;
+
+    return rows.map(r => ({
+      id: r.jid.replace(/-chat$/, ''),
+      name: r.name || r.jid.replace(/-chat$/, ''),
+      lastMessage: r.last_msg ? (r.last_msg.length > 60 ? r.last_msg.slice(0, 60) + '...' : r.last_msg) : undefined,
+      lastTime: r.last_message_time,
+      messageCount: r.msg_count,
+    }));
+  } catch {
+    // 至少返回 main 会话
+    return [{ id: 'main', name: 'main Chat', messageCount: 0 }];
+  }
+}
+
+/**
+ * 创建新会话
+ */
+export function createSession(name: string): string {
+  const id = name.toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/-+/g, '-');
+  const chatJid = getChatJid(id);
+  const timestamp = new Date().toISOString();
+  storeChatMetadata(chatJid, timestamp, `${name} Chat`);
+  return id;
+}
+
 // ==================== DB 持久化 ====================
 
 function getChatJid(group: string): string {
@@ -62,8 +132,9 @@ function saveMessageToDb(role: 'user' | 'assistant', content: string, group: str
       timestamp,
       isFromMe: role === 'assistant',
     });
-  } catch {
-    // DB 写入失败不影响聊天功能
+  } catch (err) {
+    // DB 写入失败不影响聊天功能，但记录日志以便排查数据丢失
+    console.warn('[web-ui] saveMessageToDb failed:', err);
   }
 }
 
@@ -75,7 +146,6 @@ function saveMessageToDb(role: 'user' | 'assistant', content: string, group: str
 export function getChatHistory(group = 'main', limit = 50): ChatMessage[] {
   try {
     return getStoredChatHistory(getChatJid(group), limit)
-      .reverse()
       .map(msg => ({
         id: msg.id,
         role: msg.sender === 'user' ? 'user' : 'assistant',

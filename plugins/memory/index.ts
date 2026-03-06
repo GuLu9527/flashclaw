@@ -34,9 +34,13 @@ const plugin: ToolPlugin = {
 **何时用 log**: 记录事件、笔记、动态（"今天做了XX"、"开了会"、"学了XX"），自动按日期归档，无需 key
 
 示例：
-- "记住我叫张三" → remember(key="name", value="张三")
+- "记住我叫张三" → remember(key="user_name", value="用户叫张三")
+- "你现在叫波特" → remember(key="ai_name", value="AI 的名字是波特")
+- "我喜欢吃火锅" → remember(key="user_food", value="用户喜欢吃火锅")
 - "帮我记录今天开了会" → log(value="今天开了会")
-- "我叫什么" → recall(key="name")`,
+- "我叫什么" → recall(key="user_name")
+
+key 命名建议：用 user_ 前缀表示用户信息，用 ai_ 前缀表示 AI 自身信息。`,
     input_schema: {
       type: 'object',
       properties: {

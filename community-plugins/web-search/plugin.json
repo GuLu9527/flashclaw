@@ -1,0 +1,7 @@
+{
+  "name": "web_search",
+  "version": "1.0.0",
+  "type": "tool",
+  "description": "搜索互联网获取信息",
+  "main": "index.ts"
+}

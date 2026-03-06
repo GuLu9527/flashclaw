@@ -121,7 +121,7 @@ pagesRoutes.get('/', async (c) => {
 
 // ==================== 聊天页面 ====================
 pagesRoutes.get('/chat', async (c) => {
-  const history = getChatHistory(50);
+  const history = getChatHistory('main', 50);
 
   const content = html`
     <div class="chat-page">
@@ -300,7 +300,12 @@ pagesRoutes.get('/chat', async (c) => {
                     assistantMsg.rawText += evt.data;
                     scheduleAssistantRender();
                   } else if (evt.type === 'tool') {
-                    addMessage('assistant', '🔧 调用工具: ' + (evt.data?.name || ''));
+                    // 工具事件用独立样式展示，不混入 assistant 文本
+                    const toolDiv = document.createElement('div');
+                    toolDiv.className = 'chat-message tool';
+                    toolDiv.innerHTML = '<div class="content" style="font-size:0.8rem;color:var(--pico-muted-color);padding:0.25rem 0.5rem;">🔧 ' + (evt.data?.name || '') + '</div>';
+                    messagesContainer.insertBefore(toolDiv, messagesContainer.lastElementChild);
+                    scrollToBottom();
                   } else if (evt.type === 'error') {
                     assistantMsg.rawText += '\\n\\n❌ 错误: ' + evt.data;
                     scheduleAssistantRender();

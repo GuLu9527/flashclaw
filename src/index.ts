@@ -17,6 +17,7 @@ import pino from 'pino';
 import { z } from 'zod';
 
 import { paths, ensureDirectories, getBuiltinPluginsDir, getCommunityPluginsDir } from './paths.js';
+import { ensureSoulTemplates } from './soul-manager.js';
 import { pluginManager } from './plugins/manager.js';
 import { loadFromDir, watchPlugins, stopWatching } from './plugins/loader.js';
 import { Message, ToolContext, AIProviderPlugin } from './plugins/types.js';
@@ -199,6 +200,63 @@ function shouldTriggerAgent(msg: Message, group: RegisteredGroup): boolean {
   }
 
   return false;
+}
+
+// ==================== 规则摘要 ====================
+
+/**
+ * 基于规则的会话摘要（不调用 AI）
+ * 提取最近关键消息，生成简洁要点列表
+ */
+function buildRuleSummary(messages: Array<{ role: string; content: string | unknown }>): string {
+  if (!messages || messages.length === 0) {
+    return '（会话为空，无需摘要）';
+  }
+
+  // 提取文本内容
+  const extractText = (content: string | unknown): string => {
+    if (typeof content === 'string') return content;
+    if (Array.isArray(content)) {
+      return content
+        .filter((b: { type?: string; text?: string }) => b.type === 'text' && b.text)
+        .map((b: { text: string }) => b.text)
+        .join('');
+    }
+    return '';
+  };
+
+  // 取最近 10 条消息
+  const recent = messages.slice(-10);
+  const lines: string[] = [];
+
+  // 提取用户问题（最多 3 条）
+  const userMessages = recent.filter(m => m.role === 'user');
+  const recentUserMsgs = userMessages.slice(-3);
+  if (recentUserMsgs.length > 0) {
+    lines.push('**用户问题：**');
+    for (const m of recentUserMsgs) {
+      const text = extractText(m.content).slice(0, 100);
+      if (text) lines.push(`- ${text}${extractText(m.content).length > 100 ? '...' : ''}`);
+    }
+  }
+
+  // 提取 AI 回复要点（最后 2 条）
+  const assistantMessages = recent.filter(m => m.role === 'assistant');
+  const recentAssistantMsgs = assistantMessages.slice(-2);
+  if (recentAssistantMsgs.length > 0) {
+    lines.push('**AI 回复要点：**');
+    for (const m of recentAssistantMsgs) {
+      const text = extractText(m.content).slice(0, 150);
+      if (text) lines.push(`- ${text}${extractText(m.content).length > 150 ? '...' : ''}`);
+    }
+  }
+
+  if (lines.length === 0) {
+    return '（无法提取有效内容）';
+  }
+
+  lines.push(`\n_共 ${messages.length} 条消息_`);
+  return lines.join('\n');
 }
 
 // 重新导出工具函数（保持向后兼容）
@@ -408,7 +466,9 @@ async function processQueuedMessage(queuedMsg: QueuedMessage<Message>): Promise<
     }
 
     if (response) {
-      lastAgentTimestamp[chatId] = msg.timestamp;
+      // 推进到本批最后一条消息的时间戳，避免下次重复处理已处理的消息
+      const lastProcessedTimestamp = missedMessages[missedMessages.length - 1]?.timestamp || msg.timestamp;
+      lastAgentTimestamp[chatId] = lastProcessedTimestamp;
       saveState();
       
       const finalText = `${BOT_NAME}: ${response}`;
@@ -599,6 +659,7 @@ async function handleIncomingMessage(msg: Message): Promise<void> {
       userId: msg.senderId,
       userName: msg.senderName || '用户',
       platform: msg.platform,
+      groupFolder: group.folder,
       getSessionStats: () => {
         // 获取真实的 token 统计数据
         const trackerStats = getTrackerStats(chatId);
@@ -683,11 +744,34 @@ async function handleIncomingMessage(msg: Message): Promise<void> {
       // 发送命令响应
       await channelManager.sendMessage(chatId, result.response, msg.platform);
       
-      // 如果是 /compact 命令，执行实际压缩（必须 await 以确保错误被捕获）
-      if (msg.content.trim().toLowerCase().startsWith('/compact') || 
-          msg.content.trim() === '/压缩') {
+      // 如果是 /compact 命令，执行实际压缩
+      const compactMatch = msg.content.trim().match(/^\/(compact|压缩)(?:\s+(.+))?$/i);
+      if (compactMatch) {
+        const compactArg = compactMatch[2]?.trim().toLowerCase();
+        const isFastMode = compactArg && ['fast', 'quick', 'rule', '快速'].includes(compactArg);
+        
         try {
-          await context.compactSession?.();
+          if (isFastMode) {
+            // 规则摘要模式：提取最近关键消息，不调用 AI
+            const mm = getMemoryManager();
+            const contextMessages = mm.getContext(group.folder);
+            const summary = buildRuleSummary(contextMessages);
+            
+            // 重置会话
+            if (sessions[group.folder]) {
+              delete sessions[group.folder];
+            }
+            resetTrackerSession(chatId);
+            mm.clearContext(group.folder);
+            
+            await channelManager.sendMessage(
+              chatId,
+              `✅ **会话已快速压缩**\n\n📝 **要点提取:**\n${summary}\n\n_上下文已清理。（规则模式，未调用 AI）_`,
+              msg.platform
+            );
+          } else {
+            await context.compactSession?.();
+          }
         } catch (compactErr) {
           logger.error({ chatId, err: compactErr }, '会话压缩执行失败');
           await channelManager.sendMessage(chatId, `${BOT_NAME}: ❌ 会话压缩失败，请稍后重试`, msg.platform);
@@ -1127,7 +1211,7 @@ function displayBanner(enabledPlatforms: string[], skippedPlugins: number): void
     : '无';
   const stats = pluginManager.getStats();
   const provider = pluginManager.getProvider();
-  const modelDisplay = provider ? `${provider.name} / ${getCurrentModelId()}` : 'none';
+  const modelDisplay = provider ? `${provider.name} / ${provider.getModel?.() || getCurrentModelId()}` : 'none';
   const skippedLabel = skippedPlugins > 0 ? `\x1b[90m，跳过 ${skippedPlugins}\x1b[0m` : '';
   
   const banner = `
@@ -1143,8 +1227,7 @@ function displayBanner(enabledPlatforms: string[], skippedPlugins: number): void
 
   \x1b[32m✓\x1b[0m 模型: \x1b[33m${modelDisplay}\x1b[0m
   \x1b[32m✓\x1b[0m 插件: \x1b[36m${stats.total} 个已加载\x1b[0m\x1b[90m（工具 ${stats.tools} | 渠道 ${stats.channels} | Provider ${stats.providers}）\x1b[0m${skippedLabel}
-  \x1b[32m✓\x1b[0m 平台: \x1b[36m${platformsDisplay}\x1b[0m
-  \x1b[32m✓\x1b[0m Web:  \x1b[36mhttp://127.0.0.1:${process.env.WEBUI_PORT || '3000'}\x1b[0m\x1b[90m  ← Web UI\x1b[0m
+  \x1b[32m✓\x1b[0m 平台: \x1b[36m${platformsDisplay}\x1b[0m${pluginManager.getPluginNames().includes('web-ui') ? `\n  \x1b[32m✓\x1b[0m Web:  \x1b[36mhttp://127.0.0.1:${process.env.WEBUI_PORT || '3000'}\x1b[0m\x1b[90m  ← Web UI\x1b[0m` : ''}
 
   \x1b[90m按 Ctrl+C 停止服务\x1b[0m
 `;
@@ -1156,6 +1239,9 @@ function displayBanner(enabledPlatforms: string[], skippedPlugins: number): void
 export async function main(): Promise<void> {
   // 确保所有必要目录存在
   ensureDirectories();
+  
+  // 复制内置人格模板到用户目录（首次运行时）
+  ensureSoulTemplates();
 
   // 启动时配置校验：根据 AI_PROVIDER 检查对应的 API Key
   const aiProvider = process.env.AI_PROVIDER || 'anthropic-provider';
@@ -1296,7 +1382,7 @@ ${envExists
 
   // 加载状态
   loadState();
-  
+
   // 初始化核心 API 层（所有渠道的统一入口）
   const { initCoreApi } = await import('./core-api.js');
   const mainStartTime = Date.now();

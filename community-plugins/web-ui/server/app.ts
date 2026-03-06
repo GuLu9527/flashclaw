@@ -85,7 +85,8 @@ export function createApp(options: AppOptions = {}) {
       if (c.req.path === '/login' && c.req.method === 'POST') {
         const body = await c.req.parseBody();
         if (body.token === options.token) {
-          c.header('Set-Cookie', `token=${encodeURIComponent(options.token)}; Path=/; HttpOnly; SameSite=Strict; Secure`);
+          const secure = c.req.url.startsWith('https') ? '; Secure' : '';
+          c.header('Set-Cookie', `token=${encodeURIComponent(options.token)}; Path=/; HttpOnly; SameSite=Strict${secure}`);
           return c.redirect('/');
         }
         return c.redirect('/login?error=1');

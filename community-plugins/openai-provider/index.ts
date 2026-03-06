@@ -23,6 +23,36 @@ let baseURL: string = 'https://api.openai.com/v1';
 // ==================== 常量 ====================
 
 const MAX_TOOL_CALL_DEPTH = 20;
+
+/**
+ * 从错误对象中提取完整的错误信息链（包括 cause）
+ * OpenAI SDK 的 APIConnectionError 会将真正的网络错误藏在 cause 中
+ */
+function extractFullErrorMessage(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  
+  const parts: string[] = [err.message];
+  let current: unknown = (err as Error & { cause?: unknown }).cause;
+  let depth = 0;
+  
+  while (current && depth < 5) {
+    if (current instanceof Error) {
+      parts.push(current.message);
+      current = (current as Error & { cause?: unknown }).cause;
+    } else {
+      parts.push(String(current));
+      break;
+    }
+    depth++;
+  }
+  
+  const status = (err as Error & { status?: number }).status;
+  if (status) {
+    parts.unshift(`[HTTP ${status}]`);
+  }
+  
+  return parts.join(' \u2192 ');
+}
 const MAX_TOOL_RESULT_CHARS = 4000;
 const KEEP_RECENT_TOOL_ROUNDS = 2;
 
@@ -239,8 +269,13 @@ const openaiProvider: AIProviderPlugin = {
       params.stop = options.stopSequences;
     }
 
-    const response = await client.chat.completions.create(params);
-    return response;
+    try {
+      const response = await client.chat.completions.create(params);
+      return response;
+    } catch (err) {
+      const detail = extractFullErrorMessage(err);
+      throw new Error(`OpenAI API 请求失败 (${baseURL}): ${detail}`);
+    }
   },
 
   async *chatStream(
@@ -278,7 +313,13 @@ const openaiProvider: AIProviderPlugin = {
       params.stop = options.stopSequences;
     }
 
-    const stream = await client.chat.completions.create(params);
+    let stream;
+    try {
+      stream = await client.chat.completions.create(params);
+    } catch (err) {
+      const detail = extractFullErrorMessage(err);
+      throw new Error(`OpenAI API 流式请求失败 (${baseURL}): ${detail}`);
+    }
 
     let finalContent = '';
     let finishReason: string | null = null;

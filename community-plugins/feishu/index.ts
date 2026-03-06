@@ -398,9 +398,10 @@ class FeishuChannelPlugin implements ChannelPlugin {
       return { success: false, error: '飞书插件未初始化' };
     }
 
+    let imagePath: string | undefined;
+    let isTemp = false;
+
     try {
-      let imagePath: string;
-      let isTemp = false;
 
       // 处理不同格式的图片数据
       if (typeof imageData === 'string') {
@@ -456,17 +457,17 @@ class FeishuChannelPlugin implements ChannelPlugin {
         await this.sendMessage(chatId, caption.trim());
       }
 
-      // 清理临时文件
-      if (isTemp) {
-        try { fs.unlinkSync(imagePath); } catch {}
-      }
-
       const messageId = getResponseStringField(sendRes, 'message_id');
       logger.info({ chatId, plugin: this.name }, '图片发送成功');
       return { success: true, messageId };
     } catch (err: any) {
       logger.error({ chatId, err, plugin: this.name }, '发送图片失败');
       return { success: false, error: err?.message || String(err) };
+    } finally {
+      // 清理临时文件（无论成功还是失败都要清理）
+      if (isTemp && imagePath) {
+        try { fs.unlinkSync(imagePath); } catch {}
+      }
     }
   }
 
