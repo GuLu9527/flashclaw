@@ -161,16 +161,20 @@ export function clearSession(groupName: string): boolean {
   const entry = Object.entries(groups).find(([chatId, g]) => 
     g.folder === groupName || g.name === groupName || chatId === groupName || chatId === `${groupName}-chat`
   );
+
+  const mm = getMemoryManager();
+
   if (!entry) {
-    logger.warn({ group: groupName }, '清除会话失败：群组未注册');
-    return false;
+    // Web UI 动态创建的会话可能不在群组注册表中，尝试直接清理
+    logger.debug({ group: groupName }, '群组未注册，尝试直接清理会话上下文');
+    d.resetSession(groupName);
+    resetTrackerSession(`${groupName}-chat`);
+    mm.clearContext(groupName);
+    return true;
   }
 
   d.resetSession(entry[1].folder);
   resetTrackerSession(entry[0]);
-  
-  // 清除记忆上下文
-  const mm = getMemoryManager();
   mm.clearContext(entry[1].folder);
   
   logger.info({ group: groupName, folder: entry[1].folder }, '⚡ 会话已清除');

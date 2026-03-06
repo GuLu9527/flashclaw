@@ -265,15 +265,23 @@ export class PluginManager {
    * 停止所有渠道插件（不清空注册）
    */
   async stopAll(): Promise<void> {
+    const STOP_TIMEOUT = 5000;
     const promises: Promise<void>[] = [];
 
     for (const entry of this.plugins.values()) {
       if (isChannelPlugin(entry.plugin)) {
-        promises.push(
+        const stopPromise = Promise.race([
           entry.plugin.stop().catch((err) => {
             logger.warn({ plugin: entry.plugin.name, err }, '停止插件失败');
-          })
-        );
+          }),
+          new Promise<void>((resolve) => {
+            setTimeout(() => {
+              logger.warn({ plugin: entry.plugin.name }, `停止插件超时（${STOP_TIMEOUT}ms），跳过`);
+              resolve();
+            }, STOP_TIMEOUT);
+          }),
+        ]);
+        promises.push(stopPromise);
       }
     }
 

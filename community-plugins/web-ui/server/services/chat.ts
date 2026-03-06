@@ -219,18 +219,41 @@ export async function sendMessageStream(
 }
 
 /**
- * 清空聊天历史
+ * 清空聊天历史（保留会话元数据）
  */
 export function clearChatHistory(group = 'main'): boolean {
   try {
-    // 清除 DB 中的消息记录
     const db = getDb();
     const chatJid = getChatJid(group);
     db.prepare('DELETE FROM messages WHERE chat_jid = ?').run(chatJid);
 
-    // 清除 core-api 的内存上下文
-    const api = getCoreApi();
-    api.clearSession(group);
+    // 尝试清除 core-api 内存上下文（web-ui 创建的会话可能不在群组注册表中，失败不影响）
+    try {
+      const api = getCoreApi();
+      api.clearSession(group);
+    } catch { /* web-ui session 可能未注册为群组 */ }
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 删除会话（清空消息 + 删除会话元数据）
+ */
+export function deleteSession(group: string): boolean {
+  try {
+    const db = getDb();
+    const chatJid = getChatJid(group);
+    db.prepare('DELETE FROM messages WHERE chat_jid = ?').run(chatJid);
+    db.prepare('DELETE FROM chats WHERE jid = ?').run(chatJid);
+
+    try {
+      const api = getCoreApi();
+      api.clearSession(group);
+    } catch { /* ignore */ }
+
     return true;
   } catch {
     return false;

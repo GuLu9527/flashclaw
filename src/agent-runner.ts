@@ -738,6 +738,7 @@ async function runAgentOnce(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const agentRegistry = (globalThis as any).__flashclaw_agent_registry as {
     resolveAgent: (ctx: { channel?: string; group?: string; peer?: string }) => MultiAgentConfig;
+    getAgentById: (id: string) => MultiAgentConfig | undefined;
     filterToolsByAgent: <T extends { name: string }>(config: MultiAgentConfig, tools: T[]) => T[];
   } | undefined;
 
@@ -745,11 +746,21 @@ async function runAgentOnce(
   let resolvedAgentSoul: string | undefined;
 
   if (agentRegistry) {
-    const agentConfig = agentRegistry.resolveAgent({
-      channel: input.platform,
-      group: group.folder,
-      peer: input.userId,
-    });
+    let agentConfig: MultiAgentConfig;
+
+    // agent-internal 平台：从 group 名称中提取目标 Agent ID（格式: agent-{id}-{timestamp}）
+    if (input.platform === 'agent-internal' && group.folder.startsWith('agent-')) {
+      const targetId = group.folder.replace(/^agent-/, '').replace(/-\d+$/, '');
+      const target = agentRegistry.getAgentById?.(targetId);
+      agentConfig = target || agentRegistry.resolveAgent({ channel: input.platform, group: group.folder, peer: input.userId });
+    } else {
+      agentConfig = agentRegistry.resolveAgent({
+        channel: input.platform,
+        group: group.folder,
+        peer: input.userId,
+      });
+    }
+
     logger.debug({
       agentId: agentConfig.id,
       agentName: agentConfig.name,

@@ -476,11 +476,7 @@ export default function StatusBoard() {
   const activeRoleConfig = ROLE_MAP[activeRole];
   const stateConfig = STATE_MAP[agentState];
   const StatusIcon = stateConfig.icon;
-  // 如果有 API agents 则用动态列表，否则回退到旧的硬编码列表
-  const roomAgents = roomAgentsDynamic.length > 0 ? roomAgentsDynamic : useMemo(() => {
-    const { buildRoomAgents } = require('../components/status-board/constants');
-    return buildRoomAgents(activeRole, agentState);
-  }, [activeRole, agentState]);
+  const roomAgents = roomAgentsDynamic;
   const displayedActivityItems = useMemo(() => {
     if (activityItems.length > 0) {
       return activityItems;

@@ -7,7 +7,7 @@ import { html } from 'hono/html';
 import { getServiceStatus, getRecentActivity } from '../services/status.js';
 import { getTasks, pauseTask, resumeTask, deleteTask } from '../services/tasks.js';
 import { getPlugins, togglePlugin } from '../services/plugins.js';
-import { sendMessage, sendMessageStream, clearChatHistory, getChatHistory, getSessions, createSession, cancelRequest, getActiveRequestId } from '../services/chat.js';
+import { sendMessage, sendMessageStream, clearChatHistory, getChatHistory, getSessions, createSession, cancelRequest, getActiveRequestId, deleteSession } from '../services/chat.js';
 import { statusBadge } from '../../views/layout.js';
 
 export const apiRoutes = new Hono();
@@ -320,12 +320,9 @@ apiRoutes.get('/daily-note', async (c) => {
     const fs = await import('fs');
     const path = await import('path');
 
-    // 获取 memory daily 目录
-    const dataDir = process.env.FLASHCLAW_DATA_DIR || path.join(
-      process.env.HOME || process.env.USERPROFILE || '.',
-      '.flashclaw', 'data'
-    );
-    const dailyDir = path.join(dataDir, 'memory', 'daily');
+    // 通过 core-api 获取数据目录（与核心统一）
+    const { paths } = await import('../../../../src/paths.js');
+    const dailyDir = path.join(paths.data(), 'memory', 'daily');
 
     if (!fs.existsSync(dailyDir)) {
       return c.json({ success: true, today: null, yesterday: null });
@@ -455,12 +452,12 @@ apiRoutes.post('/sessions', async (c) => {
   return c.json({ success: true, id, name: name.trim() });
 });
 
-// 删除会话（清空消息 + 清除上下文）
+// 删除会话（清空消息 + 删除会话元数据）
 apiRoutes.delete('/sessions/:id', async (c) => {
   const id = c.req.param('id');
   if (id === 'main') {
     return c.json({ success: false, error: '不能删除主会话' }, 400);
   }
-  const success = clearChatHistory(id);
+  const success = deleteSession(id);
   return c.json({ success });
 });
