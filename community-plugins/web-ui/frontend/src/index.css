@@ -14,17 +14,17 @@
 
 .pixel-border-gold {
   box-shadow:
-    inset -4px -4px 0px 0px #B8860B,
-    inset 4px 4px 0px 0px #FFE066,
-    inset -8px -8px 0px 0px #212529,
-    inset 8px 8px 0px 0px #B8860B;
-  border: 4px solid #212529;
+    inset -4px -4px 0px 0px #C68A1A,
+    inset 4px 4px 0px 0px #FFD666,
+    inset -8px -8px 0px 0px #161b22,
+    inset 8px 8px 0px 0px #C68A1A;
+  border: 4px solid #161b22;
 }
 
 /* Scrollbar pixel style */
 ::-webkit-scrollbar { width: 12px; }
-::-webkit-scrollbar-track { background: #16213e; }
-::-webkit-scrollbar-thumb { background: #D4A017; border: 2px solid #16213e; }
+::-webkit-scrollbar-track { background: #1c2128; }
+::-webkit-scrollbar-thumb { background: #F0B429; border: 2px solid #1c2128; }
 
 /* Markdown code blocks */
 .markdown-body pre {
@@ -121,11 +121,11 @@
 }
 
 .room-agent-active {
-  filter: drop-shadow(0 0 10px rgba(250, 204, 21, 0.45));
+  filter: drop-shadow(0 0 10px rgba(240, 180, 41, 0.45));
 }
 
 .room-agent-focused {
-  filter: drop-shadow(0 0 14px rgba(250, 204, 21, 0.7));
+  filter: drop-shadow(0 0 14px rgba(240, 180, 41, 0.7));
 }
 
 @keyframes detail-slide-up {
@@ -147,6 +147,6 @@
 }
 
 .room-zone-hover:hover {
-  background-color: rgba(250, 204, 21, 0.08) !important;
-  border-color: rgba(250, 204, 21, 0.3) !important;
+  background-color: rgba(240, 180, 41, 0.08) !important;
+  border-color: rgba(240, 180, 41, 0.3) !important;
 }

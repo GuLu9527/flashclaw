@@ -4,13 +4,14 @@ export default {
   theme: {
     extend: {
       colors: {
-        gold: { DEFAULT: '#D4A017', light: '#FFE066', dark: '#B8860B' },
+        gold: { DEFAULT: '#F0B429', light: '#FFD666', dark: '#C68A1A' },
+        lobster: '#E05252',
         pixel: {
-          bg: '#1a1a2e',
-          surface: '#16213e',
-          border: '#0f3460',
-          text: '#e0e0e0',
-          muted: '#8892b0',
+          bg: '#0f1419',
+          surface: '#1c2128',
+          border: '#30363d',
+          text: '#C9D1D9',
+          muted: '#8B949E',
         },
       },
       fontFamily: {

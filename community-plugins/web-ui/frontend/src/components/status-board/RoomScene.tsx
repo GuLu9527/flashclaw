@@ -124,17 +124,17 @@ export default function RoomScene({
   const agentState = agents.find((agent) => agent.role === activeRole)?.state ?? 'idle';
 
   return (
-    <section className="relative mb-6 overflow-hidden rounded-2xl border-2 border-pixel-border bg-[#0f172a]" style={{ height: '460px' }}>
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(250,204,21,0.06),_transparent_35%),linear-gradient(180deg,_rgba(30,41,59,0.95),_rgba(15,23,42,1))]" />
+    <section className="relative mb-6 overflow-hidden rounded-2xl border-2 border-pixel-border bg-[#0f1419]" style={{ height: '460px' }}>
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(240,180,41,0.06),_transparent_35%),linear-gradient(180deg,_rgba(28,33,40,0.95),_rgba(15,20,25,1))]" />
       <div
         className="absolute inset-[18px] rounded-[22px] border border-white/10"
         style={{
           background:
-            'linear-gradient(180deg, rgba(71,85,105,0.08), rgba(30,41,59,0.18)), linear-gradient(rgba(250,204,21,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(250,204,21,0.03) 1px, transparent 1px)',
+            'linear-gradient(180deg, rgba(48,54,61,0.08), rgba(28,33,40,0.18)), linear-gradient(rgba(240,180,41,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(240,180,41,0.03) 1px, transparent 1px)',
           backgroundSize: 'auto, 22px 22px, 22px 22px',
         }}
       />
-      <div className="absolute inset-[18px] rounded-[22px] border border-slate-400/10 shadow-[inset_0_0_40px_rgba(15,23,42,0.45)]" />
+      <div className="absolute inset-[18px] rounded-[22px] border border-white/5 shadow-[inset_0_0_40px_rgba(15,20,25,0.45)]" />
 
       <RoomZones activeRole={activeRole} />
       <RoomFurniture />
