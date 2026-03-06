@@ -81,25 +81,26 @@ flashclaw plugins install hello-world
 FlashClaw 采用乐高式插件架构，添加功能就像放 Minecraft Mod 一样简单：
 
 ```
-plugins/                   # 内置插件（9个）
+plugins/                   # 核心插件（3个，随 npm 包发布）
 ├── anthropic-provider/    # Anthropic AI Provider（默认）
-├── send-message/          # 发送消息工具
-├── schedule-task/         # 创建定时任务
-├── list-tasks/            # 列出定时任务
-├── cancel-task/           # 取消定时任务
-├── pause-task/            # 暂停定时任务
-├── resume-task/           # 恢复定时任务
-├── memory/                # 长期记忆（remember/recall）
-└── register-group/        # 注册群组
+├── memory/                # 长期记忆（remember/recall/log）
+└── send-message/          # 发送消息工具
 
-community-plugins/         # 社区/官方扩展插件
-├── feishu/                # 飞书渠道插件
-├── telegram/              # Telegram 渠道插件
-├── openai-provider/       # OpenAI/Ollama/LocalAI Provider
-├── hello-world/           # 示例插件
-├── web-fetch/             # 网页抓取工具
+community-plugins/         # 社区/官方扩展插件（按需安装）
+├── feishu/                # 飞书渠道
+├── telegram/              # Telegram 渠道
+├── openai-provider/       # OpenAI/Ollama Provider
+├── schedule-task/         # 定时任务系列（含 list/cancel/pause/resume）
+├── register-group/        # 注册群组
+├── web-search/            # 互联网搜索（DuckDuckGo，代理支持）
+├── local-file-read/       # 本地文件读取
+├── reminder/              # 简化版定时提醒
+├── agent-manager/         # 多 Agent 注册表（路由、白名单、agent_send）
+├── memory-vector/         # 语义记忆搜索（Ollama embedding）
+├── web-fetch/             # 网页抓取
+├── browser-control/       # 浏览器自动化控制
 ├── web-ui/                # Web 管理界面
-└── browser-control/       # 浏览器控制工具
+└── hello-world/           # 测试插件
 
 ~/.flashclaw/plugins/      # 用户安装的插件目录
 └── my-plugin/             # 你的自定义插件
@@ -208,25 +209,24 @@ flashclaw/
 │       ├── installer.ts     # 插件安装器
 │       └── types.ts         # 插件类型定义
 │
-├── plugins/                  # 内置插件（9个）
+├── plugins/                  # 核心插件（3个，随 npm 包发布）
 │   ├── anthropic-provider/  # Anthropic AI Provider（默认）
 │   ├── memory/              # 长期记忆
-│   ├── schedule-task/       # 定时任务
-│   ├── list-tasks/          # 列出任务
-│   ├── cancel-task/         # 取消任务
-│   ├── pause-task/          # 暂停任务
-│   ├── resume-task/         # 恢复任务
-│   ├── send-message/        # 发送消息
-│   └── register-group/      # 注册群组
+│   └── send-message/        # 发送消息
 │
-└── community-plugins/        # 社区/官方扩展插件
+└── community-plugins/        # 社区/官方扩展插件（按需安装）
     ├── feishu/              # 飞书渠道
     ├── telegram/            # Telegram 渠道
     ├── openai-provider/     # OpenAI/Ollama Provider
-    ├── hello-world/         # 测试插件
-    ├── web-fetch/           # 网页内容获取
-    ├── browser-control/     # 浏览器自动化控制
-    └── web-ui/              # Web 管理界面
+    ├── schedule-task/       # 定时任务系列
+    ├── web-search/          # 互联网搜索
+    ├── local-file-read/     # 本地文件读取
+    ├── reminder/            # 简化版提醒
+    ├── agent-manager/       # 多 Agent 管理
+    ├── web-fetch/           # 网页抓取
+    ├── browser-control/     # 浏览器控制
+    ├── web-ui/              # Web 管理界面
+    └── hello-world/         # 测试插件
 ```
 
 > community-plugins 作为扩展插件库示例，默认不随 npm 包发布，可通过插件安装命令单独获取。
@@ -235,26 +235,42 @@ flashclaw/
 
 | 插件 | 说明 |
 |------|------|
-| hello-world | 测试插件，用于验证插件系统 |
-| web-fetch | 网页内容获取，支持抓取网页并转为文本 |
+| schedule-task | 定时任务创建（cron/interval/once） |
+| list-tasks / cancel-task / pause-task / resume-task | 任务管理 |
+| register-group | 群组注册 |
+| web-search | 互联网搜索（DuckDuckGo，自动代理支持） |
+| local-file-read | 本地文件读取 + 目录列表（安全白名单） |
+| reminder | 简化版定时提醒（只需 message + time） |
+| agent-manager | 多 Agent 注册表（路由、工具白名单、agent_send/agent_list） |
+| memory-vector | 语义记忆搜索（Ollama embedding） |
+| web-fetch | 网页内容获取（SSRF 防护、内容提取） |
 | browser-control | 浏览器自动化控制（基于 Playwright） |
-| web-ui | Web 管理界面，实时监控与管理（端口 3000）|
+| web-ui | Web 管理界面 + 像素状态看板（端口 3000） |
+| hello-world | 测试插件 |
 
 ## 功能特性
 
 ### AI 人格设定（SOUL.md）
 
-FlashClaw 支持通过 `SOUL.md` 文件自定义 AI 的人格和语调：
+FlashClaw 支持通过 `SOUL.md` 文件自定义 AI 的身份、人格和语调：
 
-- **全局人格**：`~/.flashclaw/SOUL.md` — 所有会话共享
-- **会话级人格**：`~/.flashclaw/groups/{群组}/SOUL.md` — 覆盖全局设定
+**加载优先级（从高到低）：**
+1. **Agent 配置** — `agents.json` 中指定的 soul 文件（多 Agent 场景）
+2. **会话级** — `~/.flashclaw/groups/{群组}/SOUL.md`（`/soul use` 命令设置）
+3. **全局** — `~/.flashclaw/SOUL.md`
+
+**内置人格模板（**`~/.flashclaw/souls/`**）：**
+- `default.md` — 默认闪电龙虾
+- `serious.md` — 严肃专业助手
+- `casual.md` — 轻松幽默伙伴
+- `minimal.md` — 极简模式（最少 token 占用）
 
 ```
 # 示例 SOUL.md
 你是一只幽默的龙虾，说话简短有力，偶尔用海洋相关的比喻。
 ```
 
-可通过 `flashclaw init` 交互式设置，也可直接编辑文件。
+聊天命令：`/soul` 查看当前人格、`/soul list` 列出可用人格、`/soul use <name>` 切换。
 
 ### 上下文窗口保护
 

@@ -262,7 +262,6 @@ community-plugins/      # 社区/官方扩展插件（按需加载）
 BOT_NAME=FlashClaw              # 机器人名称
 LOG_LEVEL=info                  # 日志级别
 AGENT_TIMEOUT=300000            # Agent 超时（毫秒）
-REACT_MAX_ROUNDS=10            # ReAct 工具调用链最大轮数
 ```
 
 ### AI 配置

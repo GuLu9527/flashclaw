@@ -57,25 +57,24 @@ flashclaw/
 │       ├── installer.ts      # 插件安装器
 │       └── types.ts          # 插件类型定义
 │
-├── plugins/                  # 内置插件（9个）
+├── plugins/                  # 核心插件（3个，随 npm 包发布）
 │   ├── anthropic-provider/   # Anthropic AI Provider（默认）
-│   ├── send-message/         # 发送消息工具
-│   ├── schedule-task/        # 创建定时任务
-│   ├── list-tasks/           # 列出定时任务
-│   ├── cancel-task/          # 取消定时任务
-│   ├── pause-task/           # 暂停定时任务
-│   ├── resume-task/          # 恢复定时任务
-│   ├── memory/               # 长期记忆
-│   └── register-group/       # 注册群组
+│   ├── memory/               # 长期记忆（remember/recall/log）
+│   └── send-message/         # 发送消息工具
 │
-├── community-plugins/        # 社区/官方扩展插件
+├── community-plugins/        # 社区/官方扩展插件（按需安装）
 │   ├── feishu/               # 飞书渠道
 │   ├── telegram/             # Telegram 渠道
 │   ├── openai-provider/      # OpenAI/Ollama Provider
-│   ├── hello-world/          # 测试插件
-│   ├── web-fetch/            # 网页内容获取
+│   ├── schedule-task/        # 定时任务系列
+│   ├── web-search/           # 互联网搜索
+│   ├── local-file-read/      # 本地文件读取
+│   ├── reminder/             # 简化版提醒
+│   ├── agent-manager/        # 多 Agent 管理
+│   ├── web-fetch/            # 网页抓取
 │   ├── browser-control/      # 浏览器自动化控制
-│   └── web-ui/               # Web 管理界面
+│   ├── web-ui/               # Web 管理界面
+│   └── hello-world/          # 测试插件
 │
 ├── groups/                   # 群组记忆
 └── data/                     # 运行时数据
