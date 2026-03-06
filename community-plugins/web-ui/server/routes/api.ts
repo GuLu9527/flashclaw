@@ -357,6 +357,51 @@ apiRoutes.get('/daily-note', async (c) => {
   }
 });
 
+// 获取最近记忆条目
+apiRoutes.get('/memories', async (c) => {
+  try {
+    const fs = await import('fs');
+    const path = await import('path');
+    const { paths } = await import('../../../../src/paths.js');
+
+    const limit = Math.min(parseInt(c.req.query('limit') || '10', 10), 50);
+    const memoryDir = path.join(paths.data(), 'memory');
+    const globalFile = path.join(memoryDir, 'global.md');
+
+    const entries: Array<{ key: string; value: string; scope: string }> = [];
+
+    // 读取全局记忆
+    if (fs.existsSync(globalFile)) {
+      const content = fs.readFileSync(globalFile, 'utf-8');
+      for (const line of content.split('\n')) {
+        const match = line.match(/^- \*\*(.+?)\*\*:\s*(.+)$/);
+        if (match) {
+          entries.push({ key: match[1], value: match[2], scope: 'global' });
+        }
+      }
+    }
+
+    // 读取用户记忆（users/ 目录下的所有 .md 文件）
+    const usersDir = path.join(memoryDir, 'users');
+    if (fs.existsSync(usersDir)) {
+      for (const file of fs.readdirSync(usersDir).filter((f: string) => f.endsWith('.md')).slice(0, 5)) {
+        const userId = file.replace('.md', '');
+        const content = fs.readFileSync(path.join(usersDir, file), 'utf-8');
+        for (const line of content.split('\n')) {
+          const match = line.match(/^- \*\*(.+?)\*\*:\s*(.+)$/);
+          if (match) {
+            entries.push({ key: match[1], value: match[2], scope: `user:${userId}` });
+          }
+        }
+      }
+    }
+
+    return c.json({ success: true, entries: entries.slice(-limit) });
+  } catch {
+    return c.json({ success: true, entries: [] });
+  }
+});
+
 // 获取今日统计
 apiRoutes.get('/stats/today', async (c) => {
   try {

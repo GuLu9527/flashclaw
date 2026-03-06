@@ -68,11 +68,11 @@
 - [x] SSE 实时推送 — 新增 `/sse/agent-state` 端点，替换轮询，状态变化即时推送
 - [x] 状态机扩展 — 精确追踪 agent 生命周期: idle→thinking→tool_use→responding→error
 - [x] 气泡实时更新 — 显示当前正在处理的消息内容/使用的工具名称
-- [ ] 位置平滑移动 — CSS transition + 缓动函数，龙虾在区域间移动
+- [x] 位置平滑移动 — 活跃角色移动到区域中心，CSS transition 1s ease-in-out 平滑动画
 
 **5.3 每日小记 & 记忆（纯代码）**
 - [x] 今日/昨日小记 — 从 memory 插件 `data/memory/daily/` 读取展示（`/api/daily-note` API + DailyNote 组件）
-- [ ] 记忆时间线 — 展示最近保存的长期记忆条目
+- [x] 记忆时间线 — 展示全局+用户记忆条目（`/api/memories` API + MemoryTimeline 组件）
 - [x] 对话统计 — 今日消息数、今日会话数（`/api/stats/today` API）
 
 **5.4 渠道状态可视化（纯代码）**

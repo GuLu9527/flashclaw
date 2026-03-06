@@ -7,6 +7,7 @@ import AgentDetailCard from '../components/status-board/AgentDetailCard';
 import ChannelStatusCards from '../components/status-board/ChannelStatusCards';
 import { buildRoomAgentsFromApi, deriveAgentState, inferActiveRole, ROLE_MAP, STATE_MAP } from '../components/status-board/constants';
 import DailyNote from '../components/status-board/DailyNote';
+import MemoryTimeline from '../components/status-board/MemoryTimeline';
 import RoomScene from '../components/status-board/RoomScene';
 import type { ActivityItem, ActivityItemType, AgentRole, AgentState, PluginInfo, ServiceStatus } from '../components/status-board/types';
 
@@ -620,7 +621,10 @@ export default function StatusBoard() {
               </section>
               <DailyNote />
             </div>
-            <ChannelStatusCards plugins={plugins} />
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <MemoryTimeline />
+              <ChannelStatusCards plugins={plugins} />
+            </div>
             <ActivityTimeline items={displayedActivityItems} />
           </div>
         )}

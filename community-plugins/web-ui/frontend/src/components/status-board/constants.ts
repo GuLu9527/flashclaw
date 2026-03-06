@@ -162,19 +162,21 @@ export function buildRoomAgents(activeRole: AgentRole, agentState: AgentState): 
   return (Object.keys(ROLE_MAP) as AgentRole[]).map((role) => {
     const roleMeta = ROLE_MAP[role];
 
-    if (role === activeRole) {
+    if (role === activeRole && agentState !== 'idle') {
+      // 活跃角色移动到其区域中心（CSS transition 实现平滑移动）
+      const zone = ROOM_ZONE_META[roleMeta.zone];
       return {
         role,
         state: agentState,
-        x: roleMeta.home.x,
-        y: roleMeta.home.y,
+        x: zone.x + zone.w / 2,
+        y: zone.y + zone.h / 2,
         note: activeState.bubble,
       };
     }
 
     return {
       role,
-      state: 'idle',
+      state: 'idle' as AgentState,
       x: roleMeta.home.x,
       y: roleMeta.home.y,
       note: ROOM_IDLE_NOTES[role],
