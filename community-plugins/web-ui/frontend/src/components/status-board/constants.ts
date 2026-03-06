@@ -209,13 +209,24 @@ export function buildRoomAgentsFromApi(
     idToRole.set(apiAgent.id, role);
 
     const isActive = apiAgent.isDefault && agentState !== 'idle';
-    agents.push({
-      role,
-      state: isActive ? agentState : 'idle',
-      x: roleMeta.home.x,
-      y: roleMeta.home.y,
-      note: isActive ? activeState.bubble : apiAgent.name,
-    });
+    if (isActive) {
+      const zone = ROOM_ZONE_META[roleMeta.zone];
+      agents.push({
+        role,
+        state: agentState,
+        x: zone.x + zone.w / 2,
+        y: zone.y + zone.h / 2,
+        note: activeState.bubble,
+      });
+    } else {
+      agents.push({
+        role,
+        state: 'idle',
+        x: roleMeta.home.x,
+        y: roleMeta.home.y,
+        note: apiAgent.name,
+      });
+    }
   });
 
   return { agents, agentIdToRole: idToRole };
