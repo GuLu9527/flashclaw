@@ -104,11 +104,20 @@ sseRoutes.get('/agent-state', async (c) => {
         const status = getServiceStatus();
         const recentActivity = getRecentActivity(1);
 
-        // 推导 agent 状态
+        // 推导 agent 状态（优先使用 agent-runner 的实时状态）
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const liveState = (globalThis as any).__flashclaw_agent_live_state as
+          | { state: string; detail: string; group: string; updatedAt: number }
+          | undefined;
+
         let agentState = 'idle';
         let detail = '';
 
-        if (!status.running) {
+        // 实时状态：5 秒内有更新的 agent-runner 状态优先
+        if (liveState && Date.now() - liveState.updatedAt < 5000 && liveState.state !== 'idle') {
+          agentState = liveState.state;
+          detail = liveState.detail;
+        } else if (!status.running) {
           agentState = 'error';
           detail = '服务未运行';
         } else if (status.activeSessions > 0) {

@@ -222,7 +222,7 @@ export class PluginManager {
         promise,
         new Promise<void>((resolve) => {
           setTimeout(() => {
-            logger.warn({ plugin: name }, `${action}超时（${CLEANUP_TIMEOUT}ms），跳过`);
+            logger.info({ plugin: name }, `${action}超时（${CLEANUP_TIMEOUT}ms），跳过`);
             resolve();
           }, CLEANUP_TIMEOUT);
         }),

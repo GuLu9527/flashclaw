@@ -33,6 +33,24 @@ import type { MultiAgentConfig } from './types.js';
 
 const logger = createLogger('AgentRunner');
 
+// ==================== 实时 Agent 状态（供 SSE 看板读取） ====================
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const agentLiveState = ((globalThis as any).__flashclaw_agent_live_state ??= {
+  state: 'idle' as string,
+  detail: '' as string,
+  group: '' as string,
+  updatedAt: 0,
+}) as { state: string; detail: string; group: string; updatedAt: number };
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+(globalThis as any).__flashclaw_agent_live_state = agentLiveState;
+
+function setLiveState(state: string, detail: string, group: string) {
+  agentLiveState.state = state;
+  agentLiveState.detail = detail;
+  agentLiveState.group = group;
+  agentLiveState.updatedAt = Date.now();
+}
+
 /**
  * 图片附件
  */
@@ -926,6 +944,7 @@ async function runAgentOnce(
     let streamedMessage: unknown = null;
 
     logger.info({ group: group.folder }, '⚡ 开始流式请求');
+    setLiveState('thinking', '正在思考...', group.folder);
 
     const finalSystemPrompt = systemPromptExtra ? systemPrompt + systemPromptExtra : systemPrompt;
 
@@ -943,9 +962,11 @@ async function runAgentOnce(
 
       if (event.type === 'thinking') {
         input.onThinking?.(event.text);
+        setLiveState('thinking', '正在思考...', group.folder);
       } else if (event.type === 'text') {
         responseText += event.text;
         input.onToken?.(event.text);
+        setLiveState('responding', '正在回复...', group.folder);
       } else if (event.type === 'tool_use') {
         // 通知工具调用（用于 CLI/Web UI 显示）
         // 确保 input 是 parsed object（OpenAI provider 流式可能发送 raw string）
@@ -955,6 +976,7 @@ async function runAgentOnce(
         }
         if (event.name) {
           input.onToolUse?.(event.name, parsedInput);
+          setLiveState('tool_use', `正在使用 ${event.name}`, group.folder);
         }
       } else if (event.type === 'done') {
         // 保存完整消息对象（包含 tool_use blocks），用于后续 handleToolUse
@@ -1044,6 +1066,7 @@ async function runAgentOnce(
       status: 'success',
       hasResult: !!result
     }, 'Agent completed');
+    setLiveState('idle', '', group.folder);
 
     return {
       status: 'success',
@@ -1071,6 +1094,7 @@ async function runAgentOnce(
       duration,
       error: errorMessage
     }, 'Agent error');
+    setLiveState('error', errorMessage, group.folder);
 
     return {
       status: 'error',
