@@ -437,6 +437,7 @@ tests/
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| 1.9.0 | 2026-03-07 | macOS 26 UI 重构、意图路由、多 Agent 架构、ReAct 工具、thinking 支持、移除 CLI 渠道 |
 | 1.8.0 | 2026-03-03 | 核心 API 层、渠道解耦、CLI Ink、记忆增强、启动日志精简 |
 | 1.7.1 | 2026-03-03 | CLI Token TPS 统计、上下文阈值修复、日志字段统一 |
 | 1.7.0 | 2026-03-01 | AI Provider 插件化，内置 Anthropic Provider，社区 OpenAI Provider |

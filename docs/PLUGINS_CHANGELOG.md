@@ -3,7 +3,7 @@
 本文件记录内置插件与社区插件的重要变更，用于发布时同步说明。
 格式参考 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)。
 
-## [Unreleased]
+## [1.9.0] - 2026-03-07
 
 ### Changed
 - web-ui CSS 全面重构为 macOS 26 液态玻璃风格（毛玻璃、圆角药丸、spring 缓动、暗/亮双主题）

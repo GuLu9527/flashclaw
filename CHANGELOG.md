@@ -4,7 +4,7 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，
 并遵循 [语义化版本](https://semver.org/spec/v2.0.0.html)。
 
-## [Unreleased]
+## [1.9.0] - 2026-03-07
 
 ### 移除
 - **像素办公室页面** — 移除 `/office` 路由、导航入口、`pixel-office.js`、`public/office/` 全部素材
