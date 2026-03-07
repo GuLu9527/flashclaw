@@ -245,7 +245,7 @@ flashclaw/
 | memory-vector | 语义记忆搜索（Ollama embedding） |
 | web-fetch | 网页内容获取（SSRF 防护、内容提取） |
 | browser-control | 浏览器自动化控制（基于 Playwright） |
-| web-ui | Web 管理界面 + 像素状态看板（端口 3000） |
+| web-ui | Web 管理界面（仪表盘、对话、日志、任务、插件管理） |
 | hello-world | 测试插件 |
 
 ## 功能特性

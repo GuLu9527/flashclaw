@@ -6,8 +6,7 @@ import { Hono } from 'hono';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { timingSafeEqual, createHash } from 'crypto';
 import { fileURLToPath } from 'url';
-import { dirname, resolve, join } from 'path';
-import { readFileSync } from 'fs';
+import { dirname, resolve } from 'path';
 import { pagesRoutes } from './routes/pages.js';
 import { apiRoutes } from './routes/api.js';
 import { sseRoutes } from './routes/sse.js';
@@ -17,8 +16,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 /** 插件根目录（web-ui/） */
 const pluginRoot = resolve(__dirname, '..');
-/** React 构建产物目录 */
-const frontendDist = resolve(pluginRoot, 'frontend', 'dist');
 
 function safeCompare(a: string, b: string): boolean {
   const hashA = createHash('sha256').update(a).digest();
@@ -35,6 +32,7 @@ export function createApp(options: AppOptions = {}) {
 
   // 可选的 Token 认证中间件
   if (options.token) {
+    const expectedToken = options.token;
     app.use('*', async (c, next) => {
       // 跳过静态资源
       if (c.req.path.startsWith('/public/')) {
@@ -46,9 +44,9 @@ export function createApp(options: AppOptions = {}) {
       const queryToken = c.req.query('token');
 
       if (
-        safeCompare(authHeader || '', `Bearer ${options.token}`) ||
-        safeCompare(cookieToken || '', options.token) ||
-        safeCompare(queryToken || '', options.token)
+        safeCompare(authHeader || '', `Bearer ${expectedToken}`) ||
+        safeCompare(cookieToken || '', expectedToken) ||
+        safeCompare(queryToken || '', expectedToken)
       ) {
         return next();
       }
@@ -84,9 +82,9 @@ export function createApp(options: AppOptions = {}) {
       // 登录提交
       if (c.req.path === '/login' && c.req.method === 'POST') {
         const body = await c.req.parseBody();
-        if (body.token === options.token) {
+        if (body.token === expectedToken) {
           const secure = c.req.url.startsWith('https') ? '; Secure' : '';
-          c.header('Set-Cookie', `token=${encodeURIComponent(options.token)}; Path=/; HttpOnly; SameSite=Strict${secure}`);
+          c.header('Set-Cookie', `token=${encodeURIComponent(expectedToken)}; Path=/; HttpOnly; SameSite=Strict${secure}`);
           return c.redirect('/');
         }
         return c.redirect('/login?error=1');
@@ -105,22 +103,8 @@ export function createApp(options: AppOptions = {}) {
   // SSE 路由
   app.route('/sse', sseRoutes);
 
-  let reactIndexHtml: string | null = null;
-  try {
-    reactIndexHtml = readFileSync(join(frontendDist, 'index.html'), 'utf-8');
-  } catch {
-    reactIndexHtml = null;
-  }
-
-  if (reactIndexHtml !== null) {
-    // React SPA 模式：服务构建产物
-    app.use('/assets/*', serveStatic({ root: frontendDist }));
-    // SPA 回退：所有非 API/SSE 路由都返回 index.html
-    app.get('*', (c) => c.html(reactIndexHtml));
-  } else {
-    // 回退：使用旧版服务端渲染模板
-    app.route('/', pagesRoutes);
-  }
+  // SSR 页面路由
+  app.route('/', pagesRoutes);
 
   return app;
 }

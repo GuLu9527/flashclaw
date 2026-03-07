@@ -113,20 +113,18 @@ sseRoutes.get('/agent-state', async (c) => {
         let agentState = 'idle';
         let detail = '';
 
-        // 实时状态：5 秒内有更新的 agent-runner 状态优先
-        if (liveState && Date.now() - liveState.updatedAt < 5000 && liveState.state !== 'idle') {
+        // 实时状态：优先使用 agent-runner 的实时状态（10 秒内有效）
+        if (liveState && Date.now() - liveState.updatedAt < 10000 && liveState.state !== 'idle') {
           agentState = liveState.state;
           detail = liveState.detail;
         } else if (!status.running) {
           agentState = 'error';
           detail = '服务未运行';
-        } else if (status.activeSessions > 0) {
-          agentState = 'responding';
-          detail = `${status.activeSessions} 个活跃会话`;
         } else if (status.activeTaskCount > 0) {
           agentState = 'tool_use';
           detail = `${status.activeTaskCount} 个活跃任务`;
         }
+        // 注意：不再使用 activeSessions 推导状态（它统计的是累计会话数，不是实时活跃状态）
 
         // 最近活动信息（用于气泡显示）
         const lastActivity = recentActivity.length > 0 ? recentActivity[0] : null;

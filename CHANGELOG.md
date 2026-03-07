@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+### 移除
+- **像素办公室页面** — 移除 `/office` 路由、导航入口、`pixel-office.js`、`public/office/` 全部素材
+- **状态看板页面** — 移除 `/status` 路由、导航入口、`status-board.js`
+
 ### 新增
 - **ReAct 自主循环** — 新增 `REACT_MAX_ROUNDS` 配置（默认 10），控制工具调用链深度上限
 - **web_search 工具插件** — 基于 DuckDuckGo 的互联网搜索，自动检测 HTTP_PROXY/HTTPS_PROXY 代理
@@ -25,6 +29,11 @@
 - **CLI thinking UI** — 思考内容折叠显示字数、Ctrl+T 展开完整推理过程；Spinner 显示"接收中..."，收到 thinking 后自动消失
 
 ### 改进
+- **Web UI macOS 26 液态玻璃风格重构** — 全面重写 CSS 设计系统：毛玻璃效果（`backdrop-filter: saturate(180%) blur(24px)`）、SF Pro 字体栈、spring/smooth 缓动曲线、圆角药丸按钮、消息气泡动画、暗/亮双主题优化
+- **Web UI SVG 图标精细化** — 导航图标重绘为 Lucide 风格（圆角线条、统一 stroke-width 1.5、stroke-linecap/linejoin round）
+- **Web UI 聊天滚动优化** — 智能自动滚动（用户滚到上方时不强制跳回底部）、平滑 `scrollTo` 动画、发送消息时强制滚到底部
+- **Web UI SyntaxError 修复** — 修复 Hono `html` 模板内 JavaScript 转义问题（`renderSessionList` 改用 DOM API、恢复 `\\n` 双反斜杠转义）
+- **Web UI 聊天消息显示修复** — `addMessage` 中 `querySelector('p')` 误匹配 markdown 渲染的 `<p>` 标签导致历史消息内容被删除，改用 `.chat-empty-hint` 精确选择器
 - **插件关闭超时保护** — `pluginManager.clear()` 中每个插件的 `stop()/cleanup()` 加 5 秒超时，防止关闭流程卡死
 - **Provider 错误诊断增强** — `anthropic-provider` 和 `openai-provider` 的 API 调用错误现在会展开完整的 `cause` 链，显示底层网络错误（DNS/TLS/HTTP 状态码等），替代泛化的 "Connection error."
 - **无渠道启动支持** — 删除 CLI 渠道后，`flashclaw start` 允许在未启用任何 channel 的情况下继续运行，保留 Web UI 访问入口

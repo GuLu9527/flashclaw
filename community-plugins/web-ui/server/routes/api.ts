@@ -5,7 +5,7 @@
 import { Hono } from 'hono';
 import { html } from 'hono/html';
 import { getServiceStatus, getRecentActivity } from '../services/status.js';
-import { getTasks, pauseTask, resumeTask, deleteTask } from '../services/tasks.js';
+import { getTasks, getTask, pauseTask, resumeTask, deleteTask, getTaskLogs, createNewTask, updateExistingTask } from '../services/tasks.js';
 import { getPlugins, togglePlugin } from '../services/plugins.js';
 import { sendMessage, sendMessageStream, clearChatHistory, getChatHistory, getSessions, createSession, cancelRequest, getActiveRequestId, deleteSession } from '../services/chat.js';
 import { statusBadge } from '../../views/layout.js';
@@ -148,6 +148,76 @@ apiRoutes.delete('/tasks/:id', async (c) => {
     return c.json({ success: true, message: '任务已删除' });
   }
   return c.json({ success: false, error: '任务不存在' }, 404);
+});
+
+// 创建任务
+apiRoutes.post('/tasks', async (c) => {
+  try {
+    const body = await c.req.json();
+    const { prompt, scheduleType, scheduleValue, groupFolder, contextMode, maxRetries, timeoutMs } = body;
+
+    if (!prompt || typeof prompt !== 'string') {
+      return c.json({ success: false, error: '任务描述不能为空' }, 400);
+    }
+    if (!['cron', 'interval', 'once'].includes(scheduleType)) {
+      return c.json({ success: false, error: '调度类型必须为 cron/interval/once' }, 400);
+    }
+    if (!scheduleValue || typeof scheduleValue !== 'string') {
+      return c.json({ success: false, error: '调度值不能为空' }, 400);
+    }
+
+    const result = createNewTask({
+      prompt: prompt.trim(),
+      scheduleType,
+      scheduleValue: scheduleValue.trim(),
+      groupFolder,
+      contextMode,
+      maxRetries,
+      timeoutMs,
+    });
+
+    if ('error' in result) {
+      return c.json({ success: false, error: result.error }, 400);
+    }
+    return c.json({ success: true, task: result });
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : '创建失败';
+    return c.json({ success: false, error: errorMsg }, 500);
+  }
+});
+
+// 更新任务
+apiRoutes.put('/tasks/:id', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const body = await c.req.json();
+    const success = updateExistingTask(id, body);
+    if (success) {
+      return c.json({ success: true, message: '任务已更新' });
+    }
+    return c.json({ success: false, error: '任务不存在' }, 404);
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : '更新失败';
+    return c.json({ success: false, error: errorMsg }, 500);
+  }
+});
+
+// 获取单个任务详情
+apiRoutes.get('/tasks/:id', async (c) => {
+  const id = c.req.param('id');
+  const task = getTask(id);
+  if (task) {
+    return c.json({ success: true, task });
+  }
+  return c.json({ success: false, error: '任务不存在' }, 404);
+});
+
+// 获取任务运行日志
+apiRoutes.get('/tasks/:id/logs', async (c) => {
+  const id = c.req.param('id');
+  const limit = Math.min(parseInt(c.req.query('limit') || '20', 10), 100);
+  const logs = getTaskLogs(id, limit);
+  return c.json({ success: true, logs });
 });
 
 // ==================== 插件 API ====================

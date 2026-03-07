@@ -202,6 +202,7 @@ describe('e2e', () => {
   let inboxDir = '';
   let outboxDir = '';
   let healthPort = 0;
+  let webUiPort = 0;
   let child: ChildProcessWithoutNullStreams | null = null;
   let output = '';
   let exited = false;
@@ -211,6 +212,7 @@ describe('e2e', () => {
     inboxDir = join(tempDir, 'e2e', 'inbox');
     outboxDir = join(tempDir, 'e2e', 'outbox');
     healthPort = await getAvailablePort();
+    webUiPort = await getAvailablePort();
 
     await fs.mkdir(join(tempDir, 'config'), { recursive: true });
     await fs.writeFile(
@@ -246,6 +248,7 @@ describe('e2e', () => {
         FLASHCLAW_MOCK_RESPONSE_PREFIX: 'E2E',
         FLASHCLAW_MOCK_TOOL_MARKER: '[tool:send_message]',
         HEALTH_PORT: String(healthPort),
+        WEBUI_PORT: String(webUiPort),
         E2E_INBOX_DIR: inboxDir,
         E2E_OUTBOX_DIR: outboxDir,
         LOG_LEVEL: 'error',

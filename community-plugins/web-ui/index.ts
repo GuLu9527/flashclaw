@@ -5,10 +5,13 @@
 
 import type { ToolPlugin, ToolContext, ToolResult, ToolSchema, PluginConfig } from '../../src/plugins/types.js';
 import { createApp } from './server/app.js';
-import type { Server } from 'http';
+
+interface ClosableServer {
+  close(callback: (err?: Error) => void): void;
+}
 
 // 服务器实例
-let server: Server | null = null;
+let server: ClosableServer | null = null;
 let serverUrl: string | null = null;
 
 // 配置

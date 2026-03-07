@@ -5,6 +5,15 @@
 
 ## [Unreleased]
 
+### Changed
+- web-ui CSS 全面重构为 macOS 26 液态玻璃风格（毛玻璃、圆角药丸、spring 缓动、暗/亮双主题）
+- web-ui SVG 导航图标重绘为 Lucide 风格（统一 stroke-width 1.5、圆角线条）
+- web-ui 聊天滚动逻辑优化（智能自动滚动 + 平滑 scrollTo）
+
+### Fixed
+- web-ui 聊天页 `querySelector('p')` 误匹配 markdown `<p>` 导致历史消息内容消失
+- web-ui 聊天页 Hono `html` 模板内 JavaScript 转义 SyntaxError（`renderSessionList` 改 DOM API）
+
 ### Removed
 - 旧 CLI 终端交互插件（已移除，终端交互改为仅保留 Web UI）
 

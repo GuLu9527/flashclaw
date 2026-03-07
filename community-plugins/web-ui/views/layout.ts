@@ -13,12 +13,12 @@ export interface LayoutOptions {
 /**
  * 基础布局模板
  */
-export function layout(options: LayoutOptions, content: HtmlEscapedString): HtmlEscapedString {
+export function layout(options: LayoutOptions, content: HtmlEscapedString | Promise<HtmlEscapedString>): HtmlEscapedString | Promise<HtmlEscapedString> {
   const { title, activeNav } = options;
 
   return html`
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="light">
+<html lang="zh-CN" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -31,37 +31,41 @@ export function layout(options: LayoutOptions, content: HtmlEscapedString): Html
 </head>
 <body>
   <svg class="icon-defs" aria-hidden="true" focusable="false">
-    <symbol id="icon-dashboard" viewBox="0 0 24 24">
-      <rect x="3" y="3" width="8" height="8" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"></rect>
-      <rect x="13" y="3" width="8" height="8" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"></rect>
-      <rect x="3" y="13" width="8" height="8" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"></rect>
-      <rect x="13" y="13" width="8" height="8" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"></rect>
+    <symbol id="icon-dashboard" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="3" y="3" width="7" height="7" rx="2.5"/>
+      <rect x="14" y="3" width="7" height="7" rx="2.5"/>
+      <rect x="3" y="14" width="7" height="7" rx="2.5"/>
+      <rect x="14" y="14" width="7" height="7" rx="2.5"/>
     </symbol>
-    <symbol id="icon-chat" viewBox="0 0 24 24">
-      <path d="M4 6.5A3.5 3.5 0 0 1 7.5 3h9A3.5 3.5 0 0 1 20 6.5v6A3.5 3.5 0 0 1 16.5 16H10l-4.5 4v-4H7.5A3.5 3.5 0 0 1 4 12.5z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path>
+    <symbol id="icon-chat" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M7.5 3h9A3.5 3.5 0 0 1 20 6.5v5a3.5 3.5 0 0 1-3.5 3.5H11l-4 3.5V15H5.5A2.5 2.5 0 0 1 3 12.5v-6A3.5 3.5 0 0 1 6.5 3z"/>
+      <path d="M8 8.5h8M8 11.5h5" opacity="0.5"/>
     </symbol>
-    <symbol id="icon-logs" viewBox="0 0 24 24">
-      <path d="M7 3h7l5 5v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path>
-      <path d="M14 3v6h6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path>
-      <path d="M9 13h6M9 17h6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path>
+    <symbol id="icon-logs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+      <polyline points="14 2 14 8 20 8"/>
+      <line x1="8" y1="13" x2="16" y2="13"/>
+      <line x1="8" y1="17" x2="13" y2="17"/>
     </symbol>
-    <symbol id="icon-tasks" viewBox="0 0 24 24">
-      <circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="1.5"></circle>
-      <path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path>
+    <symbol id="icon-tasks" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="9"/>
+      <polyline points="12 6 12 12 16 14"/>
     </symbol>
-    <symbol id="icon-plugins" viewBox="0 0 24 24">
-      <path d="M10 3h4a2 2 0 0 1 2 2v2h2a2 2 0 0 1 2 2v4h-2a2 2 0 0 0-2 2v2h-4v-2a2 2 0 0 0-2-2H8V9a2 2 0 0 1 2-2h2V5a2 2 0 0 0-2-2z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path>
-      <path d="M6 11H4a2 2 0 0 0-2 2v4h2a2 2 0 0 1 2 2v2h4v-2a2 2 0 0 1 2-2h2v-4a2 2 0 0 0-2-2H6z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path>
+    <symbol id="icon-plugins" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="4" y="4" width="16" height="16" rx="3"/>
+      <path d="M9 4v4a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1V4"/>
+      <line x1="12" y1="13" x2="12" y2="17"/>
+      <line x1="10" y1="15" x2="14" y2="15"/>
     </symbol>
-    <symbol id="icon-theme" viewBox="0 0 24 24">
-      <path d="M21 14.5A8.5 8.5 0 1 1 9.5 3a7 7 0 1 0 11.5 11.5z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path>
+    <symbol id="icon-theme" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21 12.79A9 9 0 1 1 11.21 3a7 7 0 0 0 9.79 9.79z"/>
     </symbol>
   </svg>
   <nav class="top-nav">
     <div class="nav-inner">
       <a href="/" class="brand">
         <img src="/public/flashclaw-icon.svg" alt="FlashClaw" class="brand-icon">
-        <span class="brand-text">FlashClaw</span>
+        <span class="brand-text hide-mobile">FlashClaw</span>
       </a>
       <div class="nav-links">
         <a href="/" class="nav-link ${activeNav === 'dashboard' ? 'nav-active' : ''}">
@@ -96,7 +100,7 @@ export function layout(options: LayoutOptions, content: HtmlEscapedString): Html
   </main>
   
   <footer class="page-footer">
-    <small>FlashClaw Web UI v1.0.0 | <a href="https://github.com/GuLu9527/flashclaw" target="_blank">GitHub</a></small>
+    ⚡ FlashClaw v1.0.0 · <a href="https://github.com/GuLu9527/flashclaw" target="_blank">GitHub</a>
   </footer>
   
   <script>
@@ -114,8 +118,6 @@ export function layout(options: LayoutOptions, content: HtmlEscapedString): Html
       const saved = localStorage.getItem('theme');
       if (saved) {
         document.documentElement.setAttribute('data-theme', saved);
-      } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
-        document.documentElement.setAttribute('data-theme', 'dark');
       }
     })();
   </script>
@@ -127,7 +129,7 @@ export function layout(options: LayoutOptions, content: HtmlEscapedString): Html
 /**
  * 状态徽章组件
  */
-export function statusBadge(status: string): HtmlEscapedString {
+export function statusBadge(status: string): HtmlEscapedString | Promise<HtmlEscapedString> {
   const statusMap: Record<string, { class: string; text: string }> = {
     active: { class: 'badge-success', text: '运行中' },
     running: { class: 'badge-success', text: '运行中' },
@@ -146,6 +148,6 @@ export function statusBadge(status: string): HtmlEscapedString {
 /**
  * 加载指示器
  */
-export function loadingIndicator(): HtmlEscapedString {
+export function loadingIndicator(): HtmlEscapedString | Promise<HtmlEscapedString> {
   return html`<span class="htmx-indicator" aria-busy="true">加载中...</span>`;
 }
